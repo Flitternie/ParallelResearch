@@ -1,0 +1,12 @@
+.vscode
+__pycache__
+
+
+/logs
+/data
+
+/deepresearch_benchmarking
+
+*.ipynb
+*.html
+*.key
