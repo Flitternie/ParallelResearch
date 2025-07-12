@@ -1,5 +1,5 @@
 import logging
-from modified_deep_research import DeepResearch
+from modified_parallel_deep_research import DeepResearch
 import os
 import time
 

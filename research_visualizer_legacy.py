@@ -141,9 +141,44 @@ class ResearchVisualizer:
     
     
     def load_log(self) -> Dict[str, Any]:
-        """Load the research log file"""
-        with open(self.log_file, 'r') as f:
-            return json.load(f)
+        """Load the research log file with error handling"""
+        try:
+            import os
+            if not os.path.exists(self.log_file):
+                # Return empty structure if file doesn't exist
+                return {
+                    "nodes": [],
+                    "edges": [],
+                    "start_time": ""
+                }
+            
+            if os.path.getsize(self.log_file) == 0:
+                # Return empty structure if file is empty
+                return {
+                    "nodes": [],
+                    "edges": [],
+                    "start_time": ""
+                }
+                
+            with open(self.log_file, 'r') as f:
+                content = f.read().strip()
+                if not content:
+                    # Return empty structure if file content is empty
+                    return {
+                        "nodes": [],
+                        "edges": [],
+                        "start_time": ""
+                    }
+                return json.loads(content)
+        except (json.JSONDecodeError, FileNotFoundError, PermissionError) as e:
+            print(f"Warning: Could not load log file {self.log_file}: {e}")
+            # Return empty structure on error
+            return {
+                "nodes": [],
+                "edges": [],
+                "start_time": ""
+            }
+    
     
     def _clean_text(self, text: str) -> str:
         """Clean text by removing problematic characters and normalizing quotes"""

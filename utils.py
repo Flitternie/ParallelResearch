@@ -1,7 +1,8 @@
 import json
 from typing import Dict, List, Any, Optional
 from datetime import datetime
-from research_visualizer_d3 import ResearchVisualizer
+import threading
+from research_visualizer_legacy import ResearchVisualizer
 
 # Maximum words allowed in context (25k words for safety margin)
 MAX_CONTEXT_WORDS = 25000
@@ -49,6 +50,8 @@ class ResearchLogger:
         }
         self.node_counter = 0
         self.visualizer = ResearchVisualizer(log_file=self.log_file)
+
+        self._lock = threading.Lock()
     
     def add_node(self, 
                  depth: int,
@@ -128,7 +131,8 @@ class ResearchLogger:
     
     def _save_log(self):
         """Save the current log to file"""
-        with open(self.log_file, 'w') as f:
-            json.dump(self.log_data, f, indent=2)
+        with self._lock:
+            with open(self.log_file, 'w') as f:
+                json.dump(self.log_data, f, indent=2)
         self.visualizer.visualize(output_file=f"{self.logs_dir}/research_visualization.html")
 

@@ -196,9 +196,44 @@ class ResearchVisualizer:
         self.templates = HTMLTemplatesD3()
     
     def load_log(self) -> Dict[str, Any]:
-        """Load the research log file"""
-        with open(self.log_file, 'r') as f:
-            return json.load(f)
+        """Load the research log file with error handling"""
+        try:
+            import os
+            if not os.path.exists(self.log_file):
+                # Return empty structure if file doesn't exist
+                return {
+                    "nodes": [],
+                    "edges": [],
+                    "start_time": ""
+                }
+            
+            if os.path.getsize(self.log_file) == 0:
+                # Return empty structure if file is empty
+                return {
+                    "nodes": [],
+                    "edges": [],
+                    "start_time": ""
+                }
+                
+            with open(self.log_file, 'r') as f:
+                content = f.read().strip()
+                if not content:
+                    # Return empty structure if file content is empty
+                    return {
+                        "nodes": [],
+                        "edges": [],
+                        "start_time": ""
+                    }
+                return json.loads(content)
+        except (json.JSONDecodeError, FileNotFoundError, PermissionError) as e:
+            # Log the error for debugging purposes
+            raise Warning(f"Error loading log file {self.log_file}: {e}") from e
+            # Return empty structure on error
+            return {
+                "nodes": [],
+                "edges": [],
+                "start_time": ""
+            }
     
     def _clean_text(self, text: str) -> str:
         """Clean text by removing problematic characters and normalizing quotes"""
@@ -596,7 +631,6 @@ class ResearchVisualizer:
         # Also add internal nodes to the info mapping
         for node in nodes:
             if node.get('internal_nodes'):
-                print(node['internal_nodes'])
                 for internal_node in node['internal_nodes']:
                     node_info_map[internal_node['id']] = self._create_node_info_html(internal_node)
         
@@ -1591,11 +1625,6 @@ class ResearchVisualizer:
                         "source": source_id,  # Changed from "from" to "source"
                         "target": target_id   # Changed from "to" to "target"
                     })
-                    print(f"Found internal edge: {source_id} -> {target_id} (parent: {source_parent})")
-
-        print(f"Total internal edge groups: {len(internal_edges)}")
-        for parent_id, edges in internal_edges.items():
-            print(f"Parent {parent_id} has {len(edges)} internal edges: {edges}")
 
         # Only add main nodes (non-internal) to the tree structure
         for node in log_data["nodes"]:
@@ -1639,9 +1668,9 @@ class ResearchVisualizer:
             }
             nodes.append(node_data)
 
-        print(f"Total main nodes: {len(nodes)}")
-        print(f"Nodes with internal nodes: {len([n for n in nodes if n['has_internal_nodes']])}")
-        print(f"Total internal nodes: {sum(len(n['internal_nodes']) for n in nodes if n['has_internal_nodes'])}")
+        # print(f"Total main nodes: {len(nodes)}")
+        # print(f"Nodes with internal nodes: {len([n for n in nodes if n['has_internal_nodes']])}")
+        # print(f"Total internal nodes: {sum(len(n['internal_nodes']) for n in nodes if n['has_internal_nodes'])}")
         
         # Create edges list - only include edges between main nodes
         edges = []

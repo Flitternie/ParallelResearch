@@ -5,10 +5,9 @@ import logging
 import time
 from datetime import datetime, timedelta
 import traceback
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import queue
+import re
 from pydantic import BaseModel
+from enum import Enum
 
 # NOTE: This is a modified version of the GPTResearcher class
 # from gpt_researcher.agent import GPTResearcher
@@ -29,54 +28,194 @@ LLM_PROVIDER = "openai"
 
 MAX_DEPTH = 2
 MAX_BREADTH = 4
-CONCURRENCY_LIMIT = 4
-MAX_WORKERS = 8  # Maximum number of worker threads
+CONCURRENCY_LIMIT = 32
 
-NEW_VERSION = True
 
-class ThreadSafeData:
-    """Thread-safe data structures for concurrent operations"""
+class TaskState(Enum):
+    """Task lifecycle states"""
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
+class AsyncProgress:
+    """Async-safe progress tracking"""
+    def __init__(self, total_depth: int, total_breadth: int):
+        self._lock = asyncio.Lock()
+        self.current_depth = total_depth
+        self.total_depth = total_depth
+        self.current_breadth = 0
+        self.total_breadth = total_breadth
+        self.current_query: Optional[str] = None
+        self.total_queries = 0
+        self.completed_queries = 0
+    
+    async def update_progress(self, current_query: str = None, completed: int = 0):
+        async with self._lock:
+            if current_query:
+                self.current_query = current_query
+            self.completed_queries += completed
+    
+    async def set_total_queries(self, total: int):
+        async with self._lock:
+            self.total_queries = total
+    
+    async def get_progress_copy(self):
+        async with self._lock:
+            # Return a copy for safe reading
+            return {
+                'current_depth': self.current_depth,
+                'total_depth': self.total_depth,
+                'current_breadth': self.current_breadth,
+                'total_breadth': self.total_breadth,
+                'current_query': self.current_query,
+                'total_queries': self.total_queries,
+                'completed_queries': self.completed_queries
+            }
+
+class AsyncQueryTask:
+    """Represents a query task to be processed asynchronously"""
+    def __init__(self, serp_query: Dict[str, str], depth: int, breadth: int, 
+                 parent_node_id: Optional[int], task_id: str):
+        self.serp_query = serp_query
+        self.depth = depth
+        self.breadth = breadth
+        self.parent_node_id = parent_node_id
+        self.task_id = task_id
+        self.result = None
+        self.error = None
+        self.start_time = None
+        self.end_time = None
+        self.state = TaskState.PENDING
+        self.asyncio_task: Optional[asyncio.Task] = None
+        
+    def cancel(self) -> bool:
+        """Cancel the task if it's running"""
+        if self.asyncio_task and not self.asyncio_task.done():
+            self.state = TaskState.CANCELLED
+            return self.asyncio_task.cancel()
+        return False
+        
+    def is_done(self) -> bool:
+        """Check if task is completed (successfully or not)"""
+        return self.state in [TaskState.COMPLETED, TaskState.CANCELLED, TaskState.FAILED]
+
+class AsyncTaskManager:
+    """Async-safe task manager for research operations"""
     def __init__(self):
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
         self.learnings = []
         self.citations = {}
         self.visited_urls = set()
         self.context = []
         self.sources = []
-        self.progress_queue = queue.Queue()
+        self.active_tasks: Dict[str, AsyncQueryTask] = {}
+        self.completed_tasks: Dict[str, AsyncQueryTask] = {}
+        self.task_counter = 0
+        self.total_tasks_submitted = 0
+        self.total_tasks_completed = 0
     
-    def add_learning(self, learning: str):
-        with self._lock:
+    async def add_learning(self, learning: str):
+        async with self._lock:
             self.learnings.append(learning)
     
-    def add_learnings(self, learnings: List[str]):
-        with self._lock:
+    async def add_learnings(self, learnings: List[str]):
+        async with self._lock:
             self.learnings.extend(learnings)
     
-    def add_citation(self, learning: str, citation: str):
-        with self._lock:
+    async def add_citation(self, learning: str, citation: str):
+        async with self._lock:
             self.citations[learning] = citation
     
-    def add_citations(self, citations: Dict[str, str]):
-        with self._lock:
+    async def add_citations(self, citations: Dict[str, str]):
+        async with self._lock:
             self.citations.update(citations)
     
-    def add_visited_urls(self, urls: Set[str]):
-        with self._lock:
+    async def add_visited_urls(self, urls: Set[str]):
+        async with self._lock:
             self.visited_urls.update(urls)
     
-    def add_context(self, context: str):
-        with self._lock:
+    async def add_context(self, context: str):
+        async with self._lock:
             self.context.append(context)
     
-    def add_sources(self, sources: List[str]):
-        with self._lock:
+    async def add_sources(self, sources: List[str]):
+        async with self._lock:
             self.sources.extend(sources)
     
-    def get_all_data(self) -> Dict[str, Any]:
-        with self._lock:
+    async def create_task_id(self) -> str:
+        async with self._lock:
+            self.task_counter += 1
+            return f"task_{self.task_counter}"
+    
+    async def register_task(self, task: AsyncQueryTask):
+        """Register a new task"""
+        async with self._lock:
+            self.active_tasks[task.task_id] = task
+            self.total_tasks_submitted += 1
+    
+    async def complete_task(self, task_id: str, result: Dict[str, Any] = None, error: Exception = None):
+        """Complete a task and update tracking"""
+        async with self._lock:
+            if task_id in self.active_tasks:
+                task = self.active_tasks.pop(task_id)
+                task.result = result
+                task.error = error
+                task.end_time = datetime.now()
+                if error:
+                    task.state = TaskState.FAILED
+                else:
+                    task.state = TaskState.COMPLETED
+                self.completed_tasks[task_id] = task
+                self.total_tasks_completed += 1
+                
+                # Add successful results to shared data immediately
+                if result and not error:
+                    await self._add_result_data(result)
+    
+    async def _add_result_data(self, result: Dict[str, Any]):
+        """Add result data to shared collections (called with lock held)"""
+        if 'learnings' in result:
+            self.learnings.extend(result['learnings'])
+        if 'visited_urls' in result:
+            self.visited_urls.update(set(result['visited_urls']))
+        if 'citations' in result:
+            self.citations.update(result['citations'])
+        if 'context' in result and result['context']:
+            self.context.append(result['context'])
+        if 'sources' in result and result['sources']:
+            self.sources.extend(result['sources'])
+    
+    async def get_task_stats(self) -> Dict[str, int]:
+        """Get current task processing statistics"""
+        async with self._lock:
             return {
-                'learnings': list(set(self.learnings)),
+                'submitted': self.total_tasks_submitted,
+                'completed': self.total_tasks_completed,
+                'active': len(self.active_tasks),
+                'total_registered': len(self.active_tasks) + len(self.completed_tasks)
+            }
+    
+    async def has_active_tasks(self) -> bool:
+        """Check if there are any active tasks"""
+        async with self._lock:
+            return len(self.active_tasks) > 0
+    
+    async def cancel_all_tasks(self):
+        """Cancel all active tasks"""
+        async with self._lock:
+            cancelled_count = 0
+            for task in self.active_tasks.values():
+                if task.cancel():
+                    cancelled_count += 1
+            logger.info(f"Cancelled {cancelled_count} active tasks")
+    
+    async def get_all_data(self) -> Dict[str, Any]:
+        async with self._lock:
+            return {
+                'learnings': list(self.learnings),
                 'citations': self.citations.copy(),
                 'visited_urls': list(self.visited_urls),
                 'context': self.context.copy(),
@@ -94,9 +233,8 @@ class DeepResearch:
         tone: Tone = Tone.Objective,
         config_path: Optional[str] = None,
         headers: Optional[Dict] = None,
-        concurrency_limit: int = CONCURRENCY_LIMIT,  # Match TypeScript version
+        concurrency_limit: int = CONCURRENCY_LIMIT,  # Async concurrency limit
         logs_dir: str = "research_progress.json",  # New parameter for logging
-        max_workers: int = MAX_WORKERS,  # Maximum worker threads
     ):
         self.query = query
         self.breadth = breadth
@@ -110,11 +248,11 @@ class DeepResearch:
         self.research_sources: List[str] = []
         self.context: List[str] = []
         self.concurrency_limit = concurrency_limit
-        self.max_workers = max_workers
         self.logger = ResearchLogger(logs_dir)  # Initialize logger
         self.enable_enhanced_logging = True
-        self.thread_safe_data = ThreadSafeData()
-        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        
+        # Create semaphore for concurrency control
+        self.semaphore = asyncio.Semaphore(concurrency_limit)
 
         self.researcher = GPTResearcher(
             query=self.query,
@@ -126,25 +264,18 @@ class DeepResearch:
             headers=self.headers
         )
 
-    def __del__(self):
-        """Cleanup executor on deletion"""
-        if hasattr(self, 'executor'):
-            self.executor.shutdown(wait=True)
-
     async def generate_feedback(self, query: str, num_questions: int = 3) -> List[str]:
         """Generate follow-up questions to clarify research direction"""
+        search_results = await get_search_results(query, self.researcher.retrievers[0])
+        logger.info(f"Initial web knowledge obtained: {len(search_results)} results")
 
-        if NEW_VERSION:
-            search_results = await get_search_results(query, self.researcher.retrievers[0])
-            logger.info(f"Initial web knowledge obtained: {len(search_results)} results")
+        # Get current time for context
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            # Get current time for context
-            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-            messages = [
-                {"role": "system", "content": "You are an expert researcher. Your task is to analyze the original query and search results, then generate targeted questions that explore different aspects and time periods of the topic."},
-                {"role": "user",
-                "content": f"""Original query: {query}
+        messages = [
+            {"role": "system", "content": "You are an expert researcher. Your task is to analyze the original query and search results, then generate targeted questions that explore different aspects and time periods of the topic."},
+            {"role": "user",
+            "content": f"""Original query: {query}
 
 Current time: {current_time}
 
@@ -154,11 +285,6 @@ Search results:
 Based on these results, the original query, and the current time, generate {num_questions} unique questions. Each question should explore a different aspect or time period of the topic, considering recent developments up to {current_time}.
 
 Format each question on a new line starting with 'Question: '"""}
-            ]
-        else:
-            messages = [
-                {"role": "system", "content": "You are an expert researcher helping to clarify research directions."},
-                {"role": "user", "content": f"Given the following query from the user, ask some follow up questions to clarify the research direction. Return a maximum of {num_questions} questions, but feel free to return less if the original query is clear. Format each question on a new line starting with 'Question: ': {query}"}
             ]
 
         response = await create_chat_completion(
@@ -180,19 +306,21 @@ Format each question on a new line starting with 'Question: '"""}
 
     async def generate_serp_queries(self, query: str, num_queries: int = 3) -> List[Dict[str, str]]:
         """Generate SERP queries for research"""
-        if NEW_VERSION:
-            messages = [
-                {"role": "system", "content": "You are an expert researcher generating search queries."},
-                {"role": "user",
-                    "content": f"Given the following prompt, generate {num_queries} unique search queries to research the topic thoroughly. For each query, provide a research goal. Format as 'Query: <query>' followed by 'Goal: <goal>' for each pair: {query}"}
-            ]
-        else:
-            messages = [
-                {"role": "system", "content": "You are an expert researcher generating search queries."},
-                # TODO: add the current date and time to the prompt
-                {"role": "user", "content": f"Given the following prompt, generate {num_queries} unique search queries to research the topic thoroughly. For each query, provide a research goal. Format as 'Query: <query>' followed by 'Goal: <goal>' for each pair: {query}"}
-            ]
 
+        # Pydantic models for structured output
+        class ResearchQuery(BaseModel):
+            query: str
+            researchGoal: str
+
+        class SerpQueriesResponse(BaseModel):
+            queries: List[ResearchQuery]
+
+        messages = [
+            {"role": "system", "content": "You are an expert researcher generating search queries. Generate exactly the requested number of unique search queries with their research goals."},
+            {"role": "user",
+                "content": f"Generate {num_queries} unique search queries to research the following topic thoroughly. For each query, provide a clear research goal that explains what specific aspect or information the query aims to uncover: {query}"}
+        ]
+        
         response = await create_chat_completion(
             messages=messages,
             llm_provider=LLM_PROVIDER,
@@ -202,43 +330,32 @@ Format each question on a new line starting with 'Question: '"""}
             # temperature=0.7,
             reasoning_effort=ReasoningEfforts.High.value,
             max_tokens=1000,
-            seed=42
+            seed=42,
+            response_format=SerpQueriesResponse  # Use structured output
         )
 
-        # Parse queries and goals from response
-        lines = response.split('\n')
-        queries = []
-        current_query = {}
+        # convert response to structured format
+        if isinstance(response, str):
+            try:
+                response = SerpQueriesResponse.model_validate_json(response)
+            except Exception as e:
+                logger.error(f"Failed to parse SERP queries response: {str(e)}")
+                logger.error(f"Response content: {response}")
+                raise ValueError("Failed to parse SERP queries response")
 
-        for line in lines:
-            line = line.strip()
-            if line.startswith('Query:'):
-                if current_query:
-                    queries.append(current_query)
-                current_query = {'query': line.replace('Query:', '').strip()}
-            elif line.startswith('Goal:') and current_query:
-                current_query['researchGoal'] = line.replace('Goal:', '').strip()
-
-        if current_query:
-            queries.append(current_query)
+        # With structured output, response is already parsed
+        queries = [{"query": q.query, "researchGoal": q.researchGoal} for q in response.queries]
 
         return queries[:num_queries]
 
     async def process_serp_result(self, query: str, context: str, num_learnings: int = 3) -> Dict[str, List[str]]:
         """Process research results to extract learnings and follow-up questions"""
-        if NEW_VERSION:
-            messages = [
-                {"role": "system", "content": "You are an expert researcher analyzing search results."},
-                {"role": "user",
-                "content": f"Given the following research results for the query '{query}', extract key learnings and suggest follow-up questions. For each learning, include a citation to the source URL if available. Format each learning as 'Learning [source_url]: <insight>' and each question as 'Question: <question>':\n\n{context}"}
-            ]
-        else:
-            messages = [
-                {"role": "system", "content": "You are an expert researcher analyzing search results."},
-                {"role": "user", "content": f"Given the following research results for the query '{query}', extract key learnings and suggest follow-up questions. For each learning, include a citation to the source URL if available. Format each learning as 'Learning [source_url]: <insight>' and each question as 'Question: <question>':\n\n{context}"}
-            ]
-
-
+        messages = [
+            {"role": "system", "content": "You are an expert researcher analyzing search results."},
+            {"role": "user",
+            "content": f"Given the following research results for the query '{query}', extract key learnings and suggest follow-up questions. For each learning, include a citation to the source URL if available. Format each learning as 'Learning [source_url]: <insight>' and each question as 'Question: <question>':\n\n{context}"}
+        ]
+        
         response = await create_chat_completion(
             messages=messages,
             llm_provider=LLM_PROVIDER,
@@ -261,7 +378,6 @@ Format each question on a new line starting with 'Question: '"""}
             line = line.strip()
             if line.startswith('Learning'):
                 # Extract URL if present in square brackets
-                import re
                 url_match = re.search(r'\[(.*?)\]:', line)
                 if url_match:
                     url = url_match.group(1)
@@ -288,126 +404,33 @@ Format each question on a new line starting with 'Question: '"""}
             'citations': citations
         }
 
-    def _process_query_sync(self, serp_query: Dict[str, str], depth: int, breadth: int, 
-                           current_node_id: int, progress: ResearchProgress, 
-                           on_progress=None) -> Optional[Dict[str, Any]]:
-        """Synchronous version of process_query for threading"""
-        try:
-            logger.debug(f"[DeepResearch] Starting process_query for: {serp_query['query']}")
-            progress.update_progress(current_query=serp_query['query'])
-            if on_progress:
-                on_progress(progress)
-
-            # Log the start of processing this query
-            query_node_id = self.logger.add_node(
-                depth=depth,
-                breadth=breadth,
-                query=serp_query['query'],
-                parent_id=current_node_id,
-                research_goal=serp_query['researchGoal'],
-                status="started",
-                operation="research",
-                start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            )
-
-            logger.debug(f"[DeepResearch] Created query node: {query_node_id}")
-
-            # Initialize researcher for this query with enhanced logging if enabled
-            researcher = GPTResearcher(
-                query=serp_query['query'],
-                report_type=ReportType.ResearchReport.value,
-                report_source=ReportSource.Web.value,
-                tone=self.tone,
-                websocket=self.websocket,
-                config_path=self.config_path,
-                headers=self.headers,
-                log_handler=self.logger,  # Pass the logger as log_handler
-                enable_enhanced_logging=self.enable_enhanced_logging,  # Pass enhanced logging flag
-                parent_node_id=query_node_id  # Pass the current node id to the researcher
-            )
-
-            logger.debug(f"[DeepResearch] Initialized GPTResearcher, starting conduct_research")
-
-            # Conduct research (this needs to be run in event loop)
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(researcher.conduct_research())
-            finally:
-                loop.close()
-
-            logger.debug(f"[DeepResearch] conduct_research completed")
-
-            # Get results
-            context = researcher.context
-            visited = set(researcher.visited_urls)
-            sources = researcher.research_sources
-
-            logger.debug(f"[DeepResearch] Got results - context length: {len(str(context))}, visited URLs: {len(visited)}")
-
-            # Process results (this also needs event loop)
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                results = loop.run_until_complete(self.process_serp_result(
-                    query=serp_query['query'],
-                    context=context
-                ))
-            finally:
-                loop.close()
-
-            logger.debug(f"[DeepResearch] Processed results - learnings: {len(results['learnings'])}")
-
-            # Update progress
-            progress.update_progress(completed=1)
-            if on_progress:
-                on_progress(progress)
-            
-            # Log the completion of this query
-            self.logger.update_node(
-                node_id=query_node_id,
-                status="completed",
-                visited_urls=visited,
-                end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            )
-
-            logger.debug(f"[DeepResearch] Successfully completed process_query for: {serp_query['query']}")
-
-            return {
-                'node_id': query_node_id,
-                'learnings': results['learnings'],
-                'visited_urls': visited,
-                'followUpQuestions': results['followUpQuestions'],
-                'researchGoal': serp_query['researchGoal'],
-                'citations': results['citations'],
-                'context': context if context else "",
-                'sources': sources if sources else []
-            }
-
-        except Exception as e:
-            logger.error(f"[DeepResearch] Error processing query '{serp_query['query']}': {str(e)}")
-            logger.error(f"[DeepResearch] Exception traceback: {traceback.format_exc()}")
-            # Log the error
-            try:
-                self.logger.update_node(
-                    node_id=query_node_id,
-                    status="error",
-                    results={"error": str(e)}
-                )
-            except Exception as log_error:
-                logger.error(f"[DeepResearch] Failed to log error: {log_error}")
-            return None
-
-    def _deep_research_sync(self, query: str, breadth: int, depth: int,
-                           thread_safe_data: ThreadSafeData, on_progress=None,
-                           parent_node_id: Optional[int] = None) -> Dict[str, Any]:
-        """Synchronous version of deep_research for threading"""
-        logger.debug(f"[DeepResearch] deep_research_sync called with query: {query[:100]}..., breadth: {breadth}, depth: {depth}")
+    async def deep_research(
+        self,
+        query: str,
+        breadth: int,
+        depth: int,
+        learnings: List[str] = None,
+        citations: Dict[str, str] = None,
+        visited_urls: Set[str] = None,
+        on_progress = None,
+        parent_node_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Async-based parallel research using asyncio task management"""
+        logger.debug(f"[DeepResearch] async parallel research called with query: {query[:100]}..., breadth: {breadth}, depth: {depth}")
         
-        progress = ResearchProgress(depth, breadth)
-
-        if on_progress:
-            on_progress(progress)
+        # Initialize async task manager and progress tracker
+        task_manager = AsyncTaskManager()
+        progress_tracker = AsyncProgress(depth, breadth)
+        
+        # Add initial data if provided
+        if learnings:
+            for learning in learnings:
+                await task_manager.add_learning(learning)
+        if citations:
+            for learning, citation in citations.items():
+                await task_manager.add_citation(learning, citation)
+        if visited_urls:
+            await task_manager.add_visited_urls(visited_urls)
 
         # Log the start of this research level
         current_node_id = self.logger.add_node(
@@ -420,95 +443,41 @@ Format each question on a new line starting with 'Question: '"""}
             start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         )
 
-        logger.debug(f"[DeepResearch] Created research level node: {current_node_id}")
-
-        # Generate search queries (needs event loop)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            serp_queries = loop.run_until_complete(self.generate_serp_queries(query, num_queries=breadth))
-        finally:
-            loop.close()
+        # Generate initial queries
+        serp_queries = await self.generate_serp_queries(query, num_queries=breadth)
         
-        progress.total_queries = len(serp_queries)
-        logger.debug(f"[DeepResearch] Generated {len(serp_queries)} SERP queries")
-
-        logger.debug(f"[DeepResearch] Starting concurrent processing of {len(serp_queries)} queries")
-
-        # Submit all queries to thread pool
-        future_to_query = {}
+        logger.debug(f"[DeepResearch] Generated {len(serp_queries)} initial queries")
+        
+        # Create and launch initial async tasks
+        tasks = []
         for serp_query in serp_queries:
-            future = self.executor.submit(
-                self._process_query_sync,
-                serp_query, depth, breadth, current_node_id, progress, on_progress
-            )
-            future_to_query[future] = serp_query
-
-        # Collect results as they complete
-        results = []
-        for future in as_completed(future_to_query):
-            result = future.result()
-            if result is not None:
-                results.append(result)
-                logger.debug(f"[DeepResearch] Completed query: {future_to_query[future]['query']}")
-
-        logger.debug(f"[DeepResearch] Collected {len(results)} successful results")
-
-        # Update thread-safe data
-        for result in results:
-            thread_safe_data.add_learnings(result['learnings'])
-            thread_safe_data.add_visited_urls(set(result['visited_urls']))
-            thread_safe_data.add_citations(result['citations'])
-            if result['context']:
-                thread_safe_data.add_context(result['context'])
-            if result['sources']:
-                thread_safe_data.add_sources(result['sources'])
-
-        # Prepare for concurrent recursive calls
-        if depth < MAX_DEPTH:
-            logger.debug(f"[DeepResearch] Starting concurrent deeper research for {len(results)} nodes")
+            task_id = await task_manager.create_task_id()
+            query_task = AsyncQueryTask(serp_query, depth, breadth, current_node_id, task_id)
+            await task_manager.register_task(query_task)
             
-            # Create recursive tasks
-            recursive_futures = []
-            for result in results:
-                new_breadth = max(2, breadth // 2)
-                new_depth = depth + 1
-                
-                next_query = f"""
-                Previous research goal: {result['researchGoal']}
-                Follow-up questions: {' '.join(result['followUpQuestions'])}
-                """
-
-                # Submit recursive research task
-                future = self.executor.submit(
-                    self._deep_research_sync,
-                    next_query,
-                    new_breadth,
-                    new_depth,
-                    thread_safe_data,  # Share the same thread-safe data
-                    on_progress,
-                    result['node_id']
+            # Create asyncio task
+            asyncio_task = asyncio.create_task(
+                self._async_research(
+                    query_task, task_manager, progress_tracker, on_progress
                 )
-                recursive_futures.append(future)
+            )
+            query_task.asyncio_task = asyncio_task
+            tasks.append(asyncio_task)
 
-            # Wait for all recursive calls to complete
-            for future in as_completed(recursive_futures):
-                try:
-                    future.result()  # This will raise any exceptions
-                except Exception as e:
-                    logger.error(f"[DeepResearch] Error in recursive research: {str(e)}")
-
-        # Get final data from thread-safe storage
-        final_data = thread_safe_data.get_all_data()
-
+        logger.debug(f"[DeepResearch] All initial tasks launched, waiting for completion...")
+        
+        # Wait for all tasks (including recursive ones) to complete
+        await self._wait_for_all_tasks_completion(task_manager)
+        
+        # Get final results
+        final_data = await task_manager.get_all_data()
+        
         # Trim context to stay within word limits
         trimmed_context = trim_context_to_word_limit(final_data['context'])
-        logger.info(f"Trimmed context from {len(final_data['context'])} items to {len(trimmed_context)} items to stay within word limit")
-
-        # Update final data with trimmed context
+        logger.info(f"Trimmed context from {len(final_data['context'])} items to {len(trimmed_context)} items")
         final_data['context'] = trimmed_context
 
-        # Log the completion of this research level
+        # Log completion
         self.logger.update_node(
             node_id=current_node_id,
             status="completed",
@@ -520,46 +489,212 @@ Format each question on a new line starting with 'Question: '"""}
             end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         )
 
-        logger.debug(f"[DeepResearch] deep_research_sync completed")
-
+        logger.debug(f"[DeepResearch] async research completed")
         return final_data
 
-    async def deep_research(
-        self,
-        query: str,
-        breadth: int,
-        depth: int,
-        learnings: List[str] = None,
-        citations: Dict[str, str] = None,
-        visited_urls: Set[str] = None,
-        on_progress = None,
-        parent_node_id: Optional[int] = None  # New parameter for tracking parent node
-    ) -> Dict[str, Any]:
-        """Conduct deep iterative research using multi-threading"""
-        logger.debug(f"[DeepResearch] deep_research called with query: {query[:100]}..., breadth: {breadth}, depth: {depth}")
-        
-        # Initialize thread-safe data
-        thread_safe_data = ThreadSafeData()
-        
-        # Add initial data if provided
-        if learnings:
-            for learning in learnings:
-                thread_safe_data.add_learning(learning)
-        if citations:
-            for learning, citation in citations.items():
-                thread_safe_data.add_citation(learning, citation)
-        if visited_urls:
-            thread_safe_data.add_visited_urls(visited_urls)
+    async def _async_research(self, task: AsyncQueryTask, task_manager: AsyncTaskManager,
+                               progress_tracker: AsyncProgress, on_progress=None) -> None:
+        """Process a single query task asynchronously with semaphore-controlled concurrency"""
+        async with self.semaphore:  # Control concurrency
+            try:
+                task.state = TaskState.RUNNING
+                task.start_time = datetime.now()
+                
+                logger.debug(f"[DeepResearch] Processing async task {task.task_id} at depth {task.depth} for query: {task.serp_query['query']}")
+                
+                # Update progress
+                await progress_tracker.update_progress(current_query=task.serp_query['query'])
+                if on_progress:
+                    progress_data = await progress_tracker.get_progress_copy()
+                    progress = ResearchProgress(progress_data['total_depth'], progress_data['total_breadth'])
+                    progress.current_depth = progress_data['current_depth']
+                    progress.current_breadth = progress_data['current_breadth']
+                    progress.current_query = progress_data['current_query']
+                    progress.total_queries = progress_data['total_queries']
+                    progress.completed_queries = progress_data['completed_queries']
+                    on_progress(progress)
 
-        # Run the synchronous version in a thread pool
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            self.executor,
-            self._deep_research_sync,
-            query, breadth, depth, thread_safe_data, on_progress, parent_node_id
-        )
+                # Log the start of processing this query
+                query_node_id = self.logger.add_node(
+                    depth=task.depth,
+                    breadth=task.breadth,
+                    query=task.serp_query['query'],
+                    parent_id=task.parent_node_id,
+                    research_goal=task.serp_query['researchGoal'],
+                    status="started",
+                    operation="research",
+                    start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                )
 
-        return result
+                # Initialize researcher and conduct research
+                researcher = GPTResearcher(
+                    query=task.serp_query['query'],
+                    report_type=ReportType.ResearchReport.value,
+                    report_source=ReportSource.Web.value,
+                    tone=self.tone,
+                    websocket=self.websocket,
+                    config_path=self.config_path,
+                    headers=self.headers,
+                    log_handler=self.logger,
+                    enable_enhanced_logging=self.enable_enhanced_logging,
+                    parent_node_id=query_node_id
+                )
+
+                # Conduct research - this is already async
+                await researcher.conduct_research()
+                
+                # Process results
+                context = researcher.context
+                visited = set(researcher.visited_urls)
+                sources = researcher.research_sources
+                
+                # Process SERP results
+                results = await self.process_serp_result(
+                    query=task.serp_query['query'],
+                    context=context
+                )
+                
+                # Update progress
+                await progress_tracker.update_progress(completed=1)
+                
+                # Log completion
+                self.logger.update_node(
+                    node_id=query_node_id,
+                    status="completed",
+                    visited_urls=visited,
+                    end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                )
+
+                # Prepare result
+                result = {
+                    'node_id': query_node_id,
+                    'learnings': results['learnings'],
+                    'visited_urls': visited,
+                    'followUpQuestions': results['followUpQuestions'],
+                    'researchGoal': task.serp_query['researchGoal'],
+                    'citations': results['citations'],
+                    'context': context if context else "",
+                    'sources': sources if sources else []
+                }
+                
+                # Mark task as completed
+                await task_manager.complete_task(task.task_id, result)
+                
+                # Generate recursive tasks if needed
+                if task.depth < MAX_DEPTH:
+                    logger.debug(f"[DeepResearch] Generating recursive tasks for depth {task.depth + 1}")
+                    
+                    try:
+                        await self._generate_recursive_tasks(
+                            result, task.depth, task.breadth, task_manager,
+                            progress_tracker, on_progress
+                        )
+                    except Exception as e:
+                        logger.error(f"[DeepResearch] Error generating recursive tasks: {e}")
+                
+                logger.debug(f"[DeepResearch] Completed async task {task.task_id}")
+
+            except asyncio.CancelledError:
+                logger.info(f"[DeepResearch] Task {task.task_id} was cancelled")
+                task.state = TaskState.CANCELLED
+                await task_manager.complete_task(task.task_id, error=asyncio.CancelledError("Task cancelled"))
+                raise
+            except Exception as e:
+                logger.error(f"[DeepResearch] Error in async task {task.task_id}: {str(e)}")
+                logger.error(f"[DeepResearch] Exception traceback: {traceback.format_exc()}")
+                task.state = TaskState.FAILED
+                await task_manager.complete_task(task.task_id, error=e)
+
+    async def _generate_recursive_tasks(self, parent_result: Dict[str, Any], current_depth: int, 
+                                       current_breadth: int, task_manager: AsyncTaskManager,
+                                       progress_tracker: AsyncProgress, on_progress=None):
+        """Generate recursive tasks and launch them as async tasks"""
+        try:
+            new_breadth = max(2, current_breadth // 2)
+            new_depth = current_depth + 1
+            
+            # Create next query from parent result
+            next_query = f"""
+            Previous research goal: {parent_result['researchGoal']}
+            Follow-up questions: {' '.join(parent_result['followUpQuestions'])}
+            """
+            
+            # Create planning node for this recursive level
+            recursive_planning_node_id = self.logger.add_node(
+                depth=new_depth,
+                breadth=new_breadth,
+                query=next_query,
+                parent_id=parent_result['node_id'],
+                status="started",
+                operation="plan",
+                start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            logger.debug(f"[DeepResearch] Created recursive planning node: {recursive_planning_node_id} for depth {new_depth}")
+            
+            # Generate sub-queries for this recursive level
+            sub_queries = await self.generate_serp_queries(next_query, num_queries=new_breadth)
+            
+            logger.debug(f"[DeepResearch] Generated {len(sub_queries)} recursive queries for depth {new_depth}")
+            
+            # Update the planning node with completion
+            self.logger.update_node(
+                node_id=recursive_planning_node_id,
+                status="completed",
+                results={"generated_queries": len(sub_queries)},
+                end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            # Create and launch recursive async tasks immediately
+            for serp_query in sub_queries:
+                task_id = await task_manager.create_task_id()
+                query_task = AsyncQueryTask(serp_query, new_depth, new_breadth, recursive_planning_node_id, task_id)
+                await task_manager.register_task(query_task)
+                
+                # Create and launch asyncio task immediately
+                asyncio_task = asyncio.create_task(
+                    self._async_research(
+                        query_task, task_manager, progress_tracker, on_progress
+                    )
+                )
+                query_task.asyncio_task = asyncio_task
+                
+                logger.debug(f"[DeepResearch] Launched recursive task {task_id} at depth {new_depth}")
+            
+            logger.debug(f"[DeepResearch] All recursive tasks launched for depth {new_depth}")
+            
+        except Exception as e:
+            logger.error(f"[DeepResearch] Error in _generate_recursive_tasks: {str(e)}")
+            logger.error(f"[DeepResearch] Exception traceback: {traceback.format_exc()}")
+
+    async def _wait_for_all_tasks_completion(self, task_manager: AsyncTaskManager):
+        """Wait for all active tasks to complete with timeout and better logging"""
+        logger.debug("[DeepResearch] Waiting for all tasks to complete...")
+        
+        max_wait_time = 300  # 5 minutes timeout
+        start_time = time.time()
+        last_stats_time = start_time
+        
+        while await task_manager.has_active_tasks():
+            current_time = time.time()
+            
+            # Check for timeout
+            if current_time - start_time > max_wait_time:
+                stats = await task_manager.get_task_stats()
+                logger.error(f"[DeepResearch] Timeout waiting for tasks. Stats: {stats}")
+                # Cancel remaining tasks
+                await task_manager.cancel_all_tasks()
+                break
+            
+            # Log stats periodically
+            if current_time - last_stats_time > 10:  # Every 10 seconds
+                stats = await task_manager.get_task_stats()
+                logger.debug(f"[DeepResearch] Task stats: {stats}")
+                last_stats_time = current_time
+            
+            await asyncio.sleep(0.5)  # Wait before checking again
+            
+        logger.debug("[DeepResearch] All tasks completed")
 
     async def run(self, on_progress=None) -> str:
         """Run the deep research process and generate final report"""

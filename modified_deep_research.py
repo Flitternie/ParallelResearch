@@ -128,20 +128,6 @@ Format each question on a new line starting with 'Question: '"""}
         class SerpQueriesResponse(BaseModel):
             queries: List[ResearchQuery]
 
-
-        # if NEW_VERSION:
-        #     messages = [
-        #         {"role": "system", "content": "You are an expert researcher generating search queries."},
-        #         {"role": "user",
-        #             "content": f"Given the following prompt, generate {num_queries} unique search queries to research the topic thoroughly. For each query, provide a research goal. Format as 'Query: <query>' followed by 'Goal: <goal>' for each pair: {query}"}
-        #     ]
-        # else:
-        #     messages = [
-        #         {"role": "system", "content": "You are an expert researcher generating search queries."},
-        #         # TODO: add the current date and time to the prompt
-        #         {"role": "user", "content": f"Given the following prompt, generate {num_queries} unique search queries to research the topic thoroughly. For each query, provide a research goal. Format as 'Query: <query>' followed by 'Goal: <goal>' for each pair: {query}"}
-        #     ]
-
         if NEW_VERSION:
             messages = [
                 {"role": "system", "content": "You are an expert researcher generating search queries. Generate exactly the requested number of unique search queries with their research goals."},
@@ -179,23 +165,6 @@ Format each question on a new line starting with 'Question: '"""}
 
         # With structured output, response is already parsed
         queries = [{"query": q.query, "researchGoal": q.researchGoal} for q in response.queries]
-
-        # # Parse queries and goals from response
-        # lines = response.split('\n')
-        # queries = []
-        # current_query = {}
-
-        # for line in lines:
-        #     line = line.strip()
-        #     if line.startswith('Query:'):
-        #         if current_query:
-        #             queries.append(current_query)
-        #         current_query = {'query': line.replace('Query:', '').strip()}
-        #     elif line.startswith('Goal:') and current_query:
-        #         current_query['researchGoal'] = line.replace('Goal:', '').strip()
-
-        # if current_query:
-        #     queries.append(current_query)
 
         return queries[:num_queries]
 
