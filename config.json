@@ -3,7 +3,7 @@
 "SMART_LLM": "openai:gpt-4.1",
 "STRATEGIC_LLM": "openai:o4-mini",
 
-"EMBEDDING": "custom:nomic-ai/nomic-embed-text-v1",
+"EMBEDDING": "custom:text-embedding-3-small",
 
 "RETRIEVER": "brave"
 }

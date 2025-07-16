@@ -11,10 +11,11 @@ os.makedirs(logs_dir, exist_ok=True)
 # save all the logs to a file
 logging.basicConfig(filename=f'{logs_dir}/deep_research.log', level=logging.DEBUG)
 
-# os.environ["TAVILY_API_KEY"] = open("./tavily.key").read().strip()
+os.environ["OPENAI_API_KEY"] = open("./openai.key").read().strip()
+os.environ["OPENAI_BASE_URL"] = open("openai_url.key").read().strip()
 os.environ["BRAVE_API_KEY"] = open("./brave.key").read().strip()
-os.environ["CUSTOM_EMBED_API_KEY"] = "EMPTY"
-os.environ["CUSTOM_EMBED_BASE_URL"] = "http://localhost:8000/v1/"
+os.environ["CUSTOM_EMBED_API_KEY"] = open("./openai.key").read().strip()
+os.environ["CUSTOM_EMBED_BASE_URL"] = open("openai_url.key").read().strip()
 
 user_query = "What are the latest news in Fed's monetary policy?"
 deep_researcher = DeepResearch(query=user_query, config_path="./config.json", logs_dir=logs_dir)
