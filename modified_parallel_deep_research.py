@@ -30,6 +30,8 @@ MAX_DEPTH = 2
 MAX_BREADTH = 4
 CONCURRENCY_LIMIT = 32
 
+REPORT_SOURCE = ReportSource.Web.value
+
 
 class TaskState(Enum):
     """Task lifecycle states"""
@@ -257,7 +259,7 @@ class DeepResearch:
         self.researcher = GPTResearcher(
             query=self.query,
             report_type=ReportType.DeepResearch.value,
-            report_source=ReportSource.Web.value,
+            report_source=REPORT_SOURCE,
             tone=self.tone,
             websocket=self.websocket,
             config_path=self.config_path,
@@ -292,7 +294,7 @@ Format each question on a new line starting with 'Question: '"""}
             llm_provider=LLM_PROVIDER,
             model=REASONING_MODEL,  # Using reasoning model for better question generation
             # NOTE: temperature set to 0 for reproducibility
-            # temperature=0.4,
+            temperature=0,
             max_tokens=500,
             reasoning_effort=ReasoningEfforts.High.value,
             seed=42
@@ -361,8 +363,8 @@ Format each question on a new line starting with 'Question: '"""}
             llm_provider=LLM_PROVIDER,
             model=REASONING_MODEL,  # Using reasoning model for analysis
             # NOTE: temperature set to 0 for reproducibility
-            # temperature=0.7,
             temperature=0,
+            # temperature=0.7,
             max_tokens=1000,
             reasoning_effort=ReasoningEfforts.High.value,
             seed=42
@@ -530,7 +532,7 @@ Format each question on a new line starting with 'Question: '"""}
                 researcher = GPTResearcher(
                     query=task.serp_query['query'],
                     report_type=ReportType.ResearchReport.value,
-                    report_source=ReportSource.Web.value,
+                    report_source=REPORT_SOURCE,
                     tone=self.tone,
                     websocket=self.websocket,
                     config_path=self.config_path,

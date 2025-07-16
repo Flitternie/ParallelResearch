@@ -154,6 +154,9 @@ class GPTResearcher:
         self.log_handler = log_handler
         self.prompt_family = get_prompt_family(prompt_family or self.cfg.prompt_family, self.cfg)
 
+        # NOTE: Modified parameters
+        self.context_size = 10
+
         # Initialize components
         self.research_conductor = ResearchConductor(self, enhanced_logger=self.log_handler)
         self.report_generator = ReportGenerator(self)
