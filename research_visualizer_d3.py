@@ -200,20 +200,12 @@ class ResearchVisualizer:
         try:
             import os
             if not os.path.exists(self.log_file):
-                # Return empty structure if file doesn't exist
-                return {
-                    "nodes": [],
-                    "edges": [],
-                    "start_time": ""
-                }
+                # raise error if file doesn't exist
+                raise FileNotFoundError(f"Log file {self.log_file} does not exist.")
             
             if os.path.getsize(self.log_file) == 0:
                 # Return empty structure if file is empty
-                return {
-                    "nodes": [],
-                    "edges": [],
-                    "start_time": ""
-                }
+                raise Warning(f"Log file {self.log_file} is empty.")
                 
             with open(self.log_file, 'r') as f:
                 content = f.read().strip()
@@ -228,12 +220,6 @@ class ResearchVisualizer:
         except (json.JSONDecodeError, FileNotFoundError, PermissionError) as e:
             # Log the error for debugging purposes
             raise Warning(f"Error loading log file {self.log_file}: {e}") from e
-            # Return empty structure on error
-            return {
-                "nodes": [],
-                "edges": [],
-                "start_time": ""
-            }
     
     def _clean_text(self, text: str) -> str:
         """Clean text by removing problematic characters and normalizing quotes"""
