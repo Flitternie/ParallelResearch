@@ -9,6 +9,8 @@ from gpt_researcher.document import DocumentLoader, OnlineDocumentLoader, LangCh
 from gpt_researcher.utils.enum import ReportSource
 from gpt_researcher.utils.logging_config import get_json_handler
 
+from utils import truncate, clean_document_content
+
 
 class ResearchConductor:
     """Manages and coordinates the research process."""
@@ -57,7 +59,11 @@ class ResearchConductor:
         )
 
         self.logger.debug(f"[ResearchConductor] Getting initial search results for planning")
-        search_results = await get_search_results(query, self.researcher.retrievers[0], query_domains)
+        # NOTE: Use vector store if report_source is LangChainVectorStore for initial planning
+        if self.researcher.report_source == ReportSource.LangChainVectorStore.value:
+            search_results = await get_vector_store_results(query, self.researcher.vector_store, self.researcher.vector_store_filter)
+        else:
+            search_results = await get_search_results(query, self.researcher.retrievers[0], query_domains)
         self.logger.info(f"Initial search results obtained: {len(search_results)} results")
         self.logger.debug(f"[ResearchConductor] Got {len(search_results)} initial search results")
 
@@ -150,7 +156,13 @@ class ResearchConductor:
 
         elif self.researcher.report_source == ReportSource.Local.value:
             self.logger.info("Using local search")
-            document_data = await DocumentLoader(self.researcher.cfg.doc_path).load()
+            # Load local documents only if it's not already loaded
+            if not hasattr(self, 'db') or not self.researcher.db:
+                document_data = await DocumentLoader(self.researcher.cfg.doc_path).load()
+                document_data = clean_document_content(document_data)
+                self.db = document_data
+            else:
+                document_data = self.db
             self.logger.info(f"Loaded {len(document_data)} documents")
             if self.researcher.vector_store:
                 self.researcher.vector_store.load(document_data)
@@ -411,8 +423,8 @@ class ResearchConductor:
                     node_id=subquery_node_id,
                     status="completed",
                     results={
-                        "content": str(content) if content else None,
-                        "scraped_data": scraped_data
+                        "content": truncate(str(content)) if content else None,
+                        "scraped_data": truncate(scraped_data)
                     },
                     end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 )
@@ -551,3 +563,29 @@ class ResearchConductor:
             self.researcher.vector_store.load(scraped_content)
 
         return scraped_content
+
+
+async def get_vector_store_results(query, vector_store, filter: dict | None = None):
+    """
+    Gets the results from the vector store based on the query and filter.
+    Args:
+        query (str): The query to search for in the vector store.
+        vector_store (VectorStore): The vector store to search in.
+        filter (dict | None): Optional filter to apply to the search.
+    Returns:
+        list: The results from the vector store.
+    """
+    
+    results = await vector_store.asimilarity_search(query, k=10, filter=filter)
+    if not results:
+        raise ValueError(f"No results found for query: {query} with filter: {filter}")
+    else:
+        formatted_results = [
+                {
+                    "href": result.metadata.get("source", "Unknown Source"),
+                    "body": result.page_content
+                } 
+                for result in results
+            ]
+        return formatted_results
+    

@@ -1,10 +1,12 @@
 .vscode
 __pycache__
 
-
+/misc
 /logs
 /data
+/database
 
+/vector_db
 /deepresearch_benchmarking
 
 *.ipynb

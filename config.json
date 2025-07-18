@@ -1,9 +1,9 @@
 {
-"FAST_LLM": "openai:gpt-4o-mini",
-"SMART_LLM": "openai:gpt-4.1",
-"STRATEGIC_LLM": "openai:o4-mini",
-
-"EMBEDDING": "custom:text-embedding-3-small",
-
-"RETRIEVER": "brave"
+  "FAST_LLM": "openai:gpt-4o-mini",
+  "SMART_LLM": "openai:gpt-4.1",
+  "STRATEGIC_LLM": "openai:o4-mini",
+  
+  "EMBEDDING": "custom:text-embedding-3-small",
+  "RETRIEVER": "brave",
+  "DOC_PATH": "./database"
 }

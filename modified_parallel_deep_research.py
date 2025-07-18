@@ -17,6 +17,7 @@ from gpt_researcher.utils.llm import create_chat_completion
 from gpt_researcher.utils.enum import ReportType, ReportSource, Tone
 from gpt_researcher.actions.query_processing import get_search_results
 
+from build_vector_db import load_vector_db
 from utils import ResearchLogger, ResearchProgress, trim_context_to_word_limit
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ MAX_DEPTH = 2
 MAX_BREADTH = 4
 CONCURRENCY_LIMIT = 32
 
-REPORT_SOURCE = ReportSource.Web.value
+REPORT_SOURCE = ReportSource.LangChainVectorStore.value
 
 
 class TaskState(Enum):
@@ -260,6 +261,8 @@ class DeepResearch:
             query=self.query,
             report_type=ReportType.DeepResearch.value,
             report_source=REPORT_SOURCE,
+            # NOTE: Using the langchain vector store
+            vector_store=load_vector_db("vector_db"),
             tone=self.tone,
             websocket=self.websocket,
             config_path=self.config_path,
@@ -485,9 +488,9 @@ Format each question on a new line starting with 'Question: '"""}
             status="completed",
             results={
                 'learnings': final_data['learnings'],
-                'visited_urls': final_data['visited_urls'],
                 'citations': final_data['citations']
             },
+            visited_urls=final_data['visited_urls'],
             end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         )
 
@@ -533,6 +536,8 @@ Format each question on a new line starting with 'Question: '"""}
                     query=task.serp_query['query'],
                     report_type=ReportType.ResearchReport.value,
                     report_source=REPORT_SOURCE,
+                    # NOTE: Using the langchain vector store
+                    vector_store=load_vector_db("vector_db"),
                     tone=self.tone,
                     websocket=self.websocket,
                     config_path=self.config_path,
@@ -563,6 +568,10 @@ Format each question on a new line starting with 'Question: '"""}
                 self.logger.update_node(
                     node_id=query_node_id,
                     status="completed",
+                    results={
+                        'learnings': results['learnings'],
+                        'citations': results['citations']
+                    },
                     visited_urls=visited,
                     end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 )
@@ -759,7 +768,13 @@ Format each question on a new line starting with 'Question: '"""}
         context_with_citations = trim_context_to_word_limit(context_with_citations)
         
         # Set enhanced context and visited URLs
-        self.researcher.context = "\n".join(context_with_citations)
+        self.researcher.context = """"""
+        for context in context_with_citations:
+            if isinstance(context, str):
+                self.researcher.context += f"{context}\n"
+            elif isinstance(context, list):
+                self.researcher.context += "\n".join(context) + "\n"
+        self.researcher.context = self.researcher.context.strip()
         self.researcher.visited_urls = results['visited_urls']
 
         # Set research sources
@@ -776,7 +791,6 @@ Format each question on a new line starting with 'Question: '"""}
 
         if len(results['visited_urls']) == 0:
             logger.error(f"[DeepResearch] No visited URLs found - research failed!")
-            raise ValueError("No relevant information found, no Deep Research Report generated")
 
         logger.debug(f"[DeepResearch] Generating final report...")
 

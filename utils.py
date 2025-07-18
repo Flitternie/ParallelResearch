@@ -10,7 +10,12 @@ MAX_CONTEXT_WORDS = 25000
 
 def count_words(text: str) -> int:
     """Count words in a text string"""
-    return len(text.split())
+    if isinstance(text, str):
+        return len(text.split())
+    elif isinstance(text, list):
+        return sum(count_words(item) for item in text)
+    else:
+        raise TypeError(f"Unsupported type for word counting: {type(text)}")
 
 def trim_context_to_word_limit(context_list: List[str], max_words: int = MAX_CONTEXT_WORDS) -> List[str]:
     """Trim context list to stay within word limit while preserving most recent/relevant items"""
@@ -27,6 +32,59 @@ def trim_context_to_word_limit(context_list: List[str], max_words: int = MAX_CON
             break
 
     return trimmed_context
+
+def clean_document_content(documents):
+    """Clean special tokens from document content to prevent encoding errors"""
+
+    import re
+    if not documents:
+        return documents
+        
+    cleaned_documents = []
+    special_tokens_pattern = r'<\|endoftext\|>'
+    
+    for doc in documents:
+        if hasattr(doc, 'page_content'):
+            # For LangChain-style documents
+            doc.page_content = re.sub(special_tokens_pattern, '', doc.page_content)
+            cleaned_documents.append(doc)
+        elif isinstance(doc, dict):
+            # For dictionary-style documents
+            cleaned_doc = doc.copy()
+            if 'content' in cleaned_doc:
+                cleaned_doc['content'] = re.sub(special_tokens_pattern, '', str(cleaned_doc['content']))
+            if 'raw_content' in cleaned_doc:
+                cleaned_doc['raw_content'] = re.sub(special_tokens_pattern, '', str(cleaned_doc['raw_content']))
+            if 'text' in cleaned_doc:
+                cleaned_doc['text'] = re.sub(special_tokens_pattern, '', str(cleaned_doc['text']))
+            cleaned_documents.append(cleaned_doc)
+        elif isinstance(doc, str):
+            # For string documents
+            cleaned_doc = re.sub(special_tokens_pattern, '', doc)
+            cleaned_documents.append(cleaned_doc)
+        else:
+            # For other document types, convert to string and clean
+            cleaned_doc = re.sub(special_tokens_pattern, '', str(doc))
+            cleaned_documents.append(cleaned_doc)
+            
+    return cleaned_documents
+
+def truncate(obj, max_length=100):
+    """Truncate text to a maximum length"""
+    if isinstance(obj, str):
+        if len(obj) > max_length:
+            return obj[:max_length] + ' [TRUNCATED]...'
+        return obj
+    elif isinstance(obj, list):
+        return [truncate(item, max_length) for item in obj]
+    elif isinstance(obj, dict):
+        new_obj = {}
+        for key, value in obj.items():
+            if key in ['content', 'text', 'raw_content']:
+                new_obj[key] = truncate(value, max_length)
+            else:
+                new_obj[key] = value
+        return new_obj
 
 
 class ResearchProgress:
