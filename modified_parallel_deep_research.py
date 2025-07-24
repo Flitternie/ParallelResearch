@@ -12,26 +12,16 @@ from enum import Enum
 # NOTE: This is a modified version of the GPTResearcher class
 # from gpt_researcher.agent import GPTResearcher
 from modified_agent import GPTResearcher
+from modified_researcher import get_vector_store_results
 from gpt_researcher.llm_provider.generic.base import ReasoningEfforts
 from gpt_researcher.utils.llm import create_chat_completion
 from gpt_researcher.utils.enum import ReportType, ReportSource, Tone
 from gpt_researcher.actions.query_processing import get_search_results
 
 from build_vector_db import load_vector_db
-from utils import ResearchLogger, ResearchProgress, trim_context_to_word_limit
+from utils import Config, ResearchLogger, ResearchProgress, trim_context_to_word_limit
 
 logger = logging.getLogger(__name__)
-
-# Constants for models
-STANDARD_MODEL = "gpt-4o-mini"  # For standard tasks
-REASONING_MODEL = "o3-mini"  # For reasoning tasks
-LLM_PROVIDER = "openai"
-
-MAX_DEPTH = 2
-MAX_BREADTH = 4
-CONCURRENCY_LIMIT = 32
-
-REPORT_SOURCE = ReportSource.LangChainVectorStore.value
 
 
 class TaskState(Enum):
@@ -230,17 +220,14 @@ class DeepResearch:
     def __init__(
         self,
         query: str,
-        breadth: int = 4,
+        config_path: str,
         depth: int = 1, # Depth of the research, starts at 1
+        headers: Optional[Dict] = None,
         websocket: Optional[WebSocket] = None,
         tone: Tone = Tone.Objective,
-        config_path: Optional[str] = None,
-        headers: Optional[Dict] = None,
-        concurrency_limit: int = CONCURRENCY_LIMIT,  # Async concurrency limit
         logs_dir: str = "research_progress.json",  # New parameter for logging
     ):
         self.query = query
-        self.breadth = breadth
         self.depth = depth
         self.websocket = websocket
         self.tone = tone
@@ -250,17 +237,20 @@ class DeepResearch:
         self.learnings: List[str] = []
         self.research_sources: List[str] = []
         self.context: List[str] = []
-        self.concurrency_limit = concurrency_limit
         self.logger = ResearchLogger(logs_dir)  # Initialize logger
         self.enable_enhanced_logging = True
-        
+
+        self.config = Config(config_path)
+        self.breadth = self.config.max_breadth
+        self.concurrency_limit = self.config.concurrency_limit
+
         # Create semaphore for concurrency control
-        self.semaphore = asyncio.Semaphore(concurrency_limit)
+        self.semaphore = asyncio.Semaphore(self.concurrency_limit)
 
         self.researcher = GPTResearcher(
             query=self.query,
             report_type=ReportType.DeepResearch.value,
-            report_source=REPORT_SOURCE,
+            report_source=self.config.report_source,
             # NOTE: Using the langchain vector store
             vector_store=load_vector_db("vector_db"),
             tone=self.tone,
@@ -271,7 +261,10 @@ class DeepResearch:
 
     async def generate_feedback(self, query: str, num_questions: int = 3) -> List[str]:
         """Generate follow-up questions to clarify research direction"""
-        search_results = await get_search_results(query, self.researcher.retrievers[0])
+        if self.config.report_source == ReportSource.LangChainVectorStore.value:
+            search_results = await get_vector_store_results(query, self.researcher.vector_store, self.researcher.vector_store_filter)
+        else:
+            search_results = await get_search_results(query, self.researcher.retrievers[0])
         logger.info(f"Initial web knowledge obtained: {len(search_results)} results")
 
         # Get current time for context
@@ -294,8 +287,8 @@ Format each question on a new line starting with 'Question: '"""}
 
         response = await create_chat_completion(
             messages=messages,
-            llm_provider=LLM_PROVIDER,
-            model=REASONING_MODEL,  # Using reasoning model for better question generation
+            llm_provider=self.config.llm_provider,
+            model=self.config.reasoning_model,  # Using reasoning model for better question generation
             # NOTE: temperature set to 0 for reproducibility
             temperature=0,
             max_tokens=500,
@@ -328,8 +321,8 @@ Format each question on a new line starting with 'Question: '"""}
         
         response = await create_chat_completion(
             messages=messages,
-            llm_provider=LLM_PROVIDER,
-            model=STANDARD_MODEL,  # Using GPT-4 for general task
+            llm_provider=self.config.llm_provider,
+            model=self.config.standard_model,  # Using GPT-4 for general task
             # NOTE: temperature set to 0 for reproducibility
             temperature=0,
             # temperature=0.7,
@@ -363,8 +356,8 @@ Format each question on a new line starting with 'Question: '"""}
         
         response = await create_chat_completion(
             messages=messages,
-            llm_provider=LLM_PROVIDER,
-            model=REASONING_MODEL,  # Using reasoning model for analysis
+            llm_provider=self.config.llm_provider,
+            model=self.config.reasoning_model,  # Using reasoning model for analysis
             # NOTE: temperature set to 0 for reproducibility
             temperature=0,
             # temperature=0.7,
@@ -535,7 +528,7 @@ Format each question on a new line starting with 'Question: '"""}
                 researcher = GPTResearcher(
                     query=task.serp_query['query'],
                     report_type=ReportType.ResearchReport.value,
-                    report_source=REPORT_SOURCE,
+                    report_source=self.config.report_source,
                     # NOTE: Using the langchain vector store
                     vector_store=load_vector_db("vector_db"),
                     tone=self.tone,
@@ -592,7 +585,7 @@ Format each question on a new line starting with 'Question: '"""}
                 await task_manager.complete_task(task.task_id, result)
                 
                 # Generate recursive tasks if needed
-                if task.depth < MAX_DEPTH:
+                if task.depth < self.config.max_depth:
                     logger.debug(f"[DeepResearch] Generating recursive tasks for depth {task.depth + 1}")
                     
                     try:

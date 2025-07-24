@@ -2,8 +2,16 @@
   "FAST_LLM": "openai:gpt-4o-mini",
   "SMART_LLM": "openai:gpt-4.1",
   "STRATEGIC_LLM": "openai:o4-mini",
-  
   "EMBEDDING": "custom:text-embedding-3-small",
   "RETRIEVER": "brave",
-  "DOC_PATH": "./database"
+  "DOC_PATH": "./database",
+  "STANDARD_MODEL": "gpt-4o-mini",
+  "REASONING_MODEL": "o3-mini",
+  "LLM_PROVIDER": "openai",
+  "MAX_DEPTH": 2,
+  "MAX_BREADTH": 4,
+  "CONCURRENCY_LIMIT": 32,
+  "REPORT_SOURCE": "web"
 }
+
+

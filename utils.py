@@ -87,6 +87,24 @@ def truncate(obj, max_length=100):
         return new_obj
 
 
+class Config:
+    def __init__(self, config_path: str):
+        with open(config_path, 'r') as f:
+            self.config = json.load(f)
+        # Set each key as an attribute (lowercase)
+        for key, value in self.config.items():
+            setattr(self, key.lower(), value)
+    
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.config.get(key, default)
+    
+    def __getitem__(self, key: str) -> Any:
+        return self.get(key)
+    
+    def __contains__(self, key: str) -> bool:
+        return key in self.config
+
+
 class ResearchProgress:
     def __init__(self, total_depth: int, total_breadth: int):
         self.current_depth = total_depth
@@ -98,7 +116,7 @@ class ResearchProgress:
         self.completed_queries = 0
 
 class ResearchLogger:
-    def __init__(self, logs_dir: str):
+    def __init__(self, logs_dir: str, visualization: bool = False):
         self.logs_dir = logs_dir
         self.log_file = f"{logs_dir}/progress.json"
         self.log_data = {
@@ -108,6 +126,7 @@ class ResearchLogger:
         }
         self.node_counter = 0
         self.visualizer = ResearchVisualizer(log_file=self.log_file)
+        self.visualization = visualization
 
         self._lock = threading.Lock()
     
@@ -192,5 +211,6 @@ class ResearchLogger:
         with self._lock:
             with open(self.log_file, 'w') as f:
                 json.dump(self.log_data, f, indent=2)
-        self.visualizer.visualize(output_file=f"{self.logs_dir}/research_visualization.html")
+        if self.visualization:
+            self.visualizer.visualize(output_file=f"{self.logs_dir}/research_visualization.html")
 
