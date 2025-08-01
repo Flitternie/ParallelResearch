@@ -116,7 +116,7 @@ class ResearchProgress:
         self.completed_queries = 0
 
 class ResearchLogger:
-    def __init__(self, logs_dir: str, visualization: bool = False):
+    def __init__(self, logs_dir: str, visualization: bool = False, update_callback=None):
         self.logs_dir = logs_dir
         self.log_file = f"{logs_dir}/progress.json"
         self.log_data = {
@@ -127,6 +127,7 @@ class ResearchLogger:
         self.node_counter = 0
         self.visualizer = ResearchVisualizer(log_file=self.log_file)
         self.visualization = visualization
+        self.update_callback = update_callback  # Callback for when progress is updated
 
         self._lock = threading.Lock()
     
@@ -211,6 +212,14 @@ class ResearchLogger:
         with self._lock:
             with open(self.log_file, 'w') as f:
                 json.dump(self.log_data, f, indent=2)
+        
+        # Call update callback if provided
+        if self.update_callback:
+            try:
+                self.update_callback(self.log_data)
+            except Exception as e:
+                print(f"Error in update callback: {e}")
+        
         if self.visualization:
             self.visualizer.visualize(output_file=f"{self.logs_dir}/research_visualization.html")
 

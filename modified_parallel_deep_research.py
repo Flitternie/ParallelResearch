@@ -226,6 +226,7 @@ class DeepResearch:
         websocket: Optional[WebSocket] = None,
         tone: Tone = Tone.Objective,
         logs_dir: str = "research_progress.json",  # New parameter for logging
+        progress_callback: Optional[callable] = None,  # New parameter for progress updates
     ):
         self.query = query
         self.depth = depth
@@ -237,7 +238,8 @@ class DeepResearch:
         self.learnings: List[str] = []
         self.research_sources: List[str] = []
         self.context: List[str] = []
-        self.logger = ResearchLogger(logs_dir)  # Initialize logger
+        self.progress_callback = progress_callback
+        self.logger = ResearchLogger(logs_dir, update_callback=self._on_logger_update)  # Initialize logger with callback
         self.enable_enhanced_logging = True
 
         self.config = Config(config_path)
@@ -252,12 +254,24 @@ class DeepResearch:
             report_type=ReportType.DeepResearch.value,
             report_source=self.config.report_source,
             # NOTE: Using the langchain vector store
-            vector_store=load_vector_db("vector_db"),
+            # vector_store=load_vector_db("vector_db"),
             tone=self.tone,
             websocket=self.websocket,
             config_path=self.config_path,
             headers=self.headers
         )
+    
+    def _on_logger_update(self, log_data):
+        """Called whenever the logger updates the progress.json file"""
+        if self.progress_callback:
+            try:
+                self.progress_callback({
+                    'type': 'visualization_update',
+                    'nodes': log_data.get('nodes', []),
+                    'edges': log_data.get('edges', [])
+                })
+            except Exception as e:
+                logger.error(f"Error in progress callback: {e}")
 
     async def generate_feedback(self, query: str, num_questions: int = 3) -> List[str]:
         """Generate follow-up questions to clarify research direction"""
@@ -441,7 +455,7 @@ Format each question on a new line starting with 'Question: '"""}
             start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         )
 
-        # Generate initial queries
+        # Generate initial queries (NOTE: Controlled by BREADTH)
         serp_queries = await self.generate_serp_queries(query, num_queries=breadth)
         
         logger.debug(f"[DeepResearch] Generated {len(serp_queries)} initial queries")
@@ -530,7 +544,7 @@ Format each question on a new line starting with 'Question: '"""}
                     report_type=ReportType.ResearchReport.value,
                     report_source=self.config.report_source,
                     # NOTE: Using the langchain vector store
-                    vector_store=load_vector_db("vector_db"),
+                    # vector_store=load_vector_db("vector_db"),
                     tone=self.tone,
                     websocket=self.websocket,
                     config_path=self.config_path,
@@ -584,7 +598,7 @@ Format each question on a new line starting with 'Question: '"""}
                 # Mark task as completed
                 await task_manager.complete_task(task.task_id, result)
                 
-                # Generate recursive tasks if needed
+                # Generate recursive tasks if needed (NOTE: Controlled by DEPTH)
                 if task.depth < self.config.max_depth:
                     logger.debug(f"[DeepResearch] Generating recursive tasks for depth {task.depth + 1}")
                     
@@ -614,6 +628,7 @@ Format each question on a new line starting with 'Question: '"""}
                                        progress_tracker: AsyncProgress, on_progress=None):
         """Generate recursive tasks and launch them as async tasks"""
         try:
+            # NOTE: Controlling BREADTH, currently each recursive level halves the breadth
             new_breadth = max(2, current_breadth // 2)
             new_depth = current_depth + 1
             
@@ -636,7 +651,7 @@ Format each question on a new line starting with 'Question: '"""}
             
             logger.debug(f"[DeepResearch] Created recursive planning node: {recursive_planning_node_id} for depth {new_depth}")
             
-            # Generate sub-queries for this recursive level
+            # Generate sub-queries for this recursive level (NOTE: Controlled by BREADTH)
             sub_queries = await self.generate_serp_queries(next_query, num_queries=new_breadth)
             
             logger.debug(f"[DeepResearch] Generated {len(sub_queries)} recursive queries for depth {new_depth}")

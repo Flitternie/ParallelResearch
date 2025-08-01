@@ -5,6 +5,7 @@ __pycache__
 /logs
 /data
 /database
+/evaluation
 
 /vector_db
 /deepresearch_benchmarking
