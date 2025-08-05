@@ -382,7 +382,7 @@ class DeepResearchApp {
         if (type === 'assistant') {
             // Check if content is wrapped in markdown code blocks
             let processedContent = content;
-            const markdownCodeBlockRegex = /^```markdown\s*\n([\s\S]*?)\n```$/;
+            const markdownCodeBlockRegex = /```markdown\s([\s\S]*?)```/;
             const codeBlockMatch = content.match(markdownCodeBlockRegex);
             
             if (codeBlockMatch) {
@@ -844,7 +844,7 @@ class DeepResearchApp {
         let reportContent = data.report;
         
         // Extract content from markdown code blocks if wrapped
-        const markdownCodeBlockRegex = /^```markdown\s*\n([\s\S]*?)\n```$/;
+        const markdownCodeBlockRegex = /```markdown\s([\s\S]*?)```/;
         const codeBlockMatch = reportContent.match(markdownCodeBlockRegex);
         if (codeBlockMatch) {
             reportContent = codeBlockMatch[1];

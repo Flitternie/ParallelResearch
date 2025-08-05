@@ -15,7 +15,7 @@ import weakref
 logger = logging.getLogger(__name__)
 
 try:
-    from modified_parallel_deep_research import DeepResearch
+    from flash_research import FlashResearch as DeepResearch
     from research_visualizer_d3 import ResearchVisualizer
 except ImportError as e:
     logger.error(f"Import error: {e}")
@@ -324,7 +324,7 @@ def start_research():
     # Generate session ID and create logs directory
     session_id = str(uuid.uuid4())
     timestamp = time.strftime('%Y%m%d_%H%M%S')
-    logs_dir = f"logs/{timestamp}_{session_id}"
+    logs_dir = f"logs/frontend/{timestamp}_{session_id}"
     os.makedirs(logs_dir, exist_ok=True)
     
     # Note: Logging will be configured per-session in the research task

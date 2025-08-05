@@ -689,8 +689,8 @@ Format each question on a new line starting with 'Question: '"""}
     async def _wait_for_all_tasks_completion(self, task_manager: AsyncTaskManager):
         """Wait for all active tasks to complete with timeout and better logging"""
         logger.debug("[DeepResearch] Waiting for all tasks to complete...")
-        
-        max_wait_time = 300  # 5 minutes timeout
+
+        max_wait_time = 60 * 10  # 10 minutes timeout
         start_time = time.time()
         last_stats_time = start_time
         
