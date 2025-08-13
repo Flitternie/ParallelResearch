@@ -5,48 +5,37 @@ import logging
 import time
 from datetime import datetime, timedelta
 import traceback
+import re
 from pydantic import BaseModel
 
 # NOTE: This is a modified version of the GPTResearcher class
-# from gpt_researcher.agent import GPTResearcher
 from modified_agent import GPTResearcher
+from modified_researcher import get_vector_store_results
 from gpt_researcher.llm_provider.generic.base import ReasoningEfforts
 from gpt_researcher.utils.llm import create_chat_completion
 from gpt_researcher.utils.enum import ReportType, ReportSource, Tone
 from gpt_researcher.actions.query_processing import get_search_results
 
-from utils import ResearchLogger, ResearchProgress, trim_context_to_word_limit
+from build_vector_db import load_vector_db
+from utils import Config, ResearchLogger, ResearchProgress, trim_context_to_word_limit
 
 # NOTE: This is a modified version from gpt_researcher.skills.deep_research
 logger = logging.getLogger(__name__)
-
-# Constants for models
-STANDARD_MODEL = "gpt-4o-mini"  # For standard tasks
-REASONING_MODEL = "o3-mini"  # For reasoning tasks
-LLM_PROVIDER = "openai"
-
-MAX_DEPTH = 2
-MAX_BREADTH = 4
-CONCURRENCY_LIMIT = 4
-
-NEW_VERSION = True
 
 
 class DeepResearch:
     def __init__(
         self,
         query: str,
-        breadth: int = 4,
+        config_path: str,
         depth: int = 1, # Depth of the research, starts at 1
+        headers: Optional[Dict] = None,
         websocket: Optional[WebSocket] = None,
         tone: Tone = Tone.Objective,
-        config_path: Optional[str] = None,
-        headers: Optional[Dict] = None,
-        concurrency_limit: int = CONCURRENCY_LIMIT,  # Match TypeScript version
         logs_dir: str = "research_progress.json",  # New parameter for logging
+        progress_callback: Optional[callable] = None,  # New parameter for progress updates
     ):
         self.query = query
-        self.breadth = breadth
         self.depth = depth
         self.websocket = websocket
         self.tone = tone
@@ -56,34 +45,53 @@ class DeepResearch:
         self.learnings: List[str] = []
         self.research_sources: List[str] = []
         self.context: List[str] = []
-        self.concurrency_limit = concurrency_limit
-        self.logger = ResearchLogger(logs_dir)  # Initialize logger
+        self.progress_callback = progress_callback
+        self.logger = ResearchLogger(logs_dir, update_callback=self._on_logger_update)  # Initialize logger with callback
         self.enable_enhanced_logging = True
+
+        self.config = Config(config_path)
+        self.breadth = self.config.max_breadth
+        self.concurrency_limit = self.config.concurrency_limit
+
 
         self.researcher = GPTResearcher(
             query=self.query,
             report_type=ReportType.DeepResearch.value,
-            report_source=ReportSource.Web.value,
+            report_source=self.config.report_source,
+            vector_store=load_vector_db("vector_db") if self.config.report_source == ReportSource.LangChainVectorStore.value else None,
             tone=self.tone,
             websocket=self.websocket,
             config_path=self.config_path,
             headers=self.headers
         )
 
+    def _on_logger_update(self, log_data):
+        """Called whenever the logger updates the progress.json file"""
+        if self.progress_callback:
+            try:
+                self.progress_callback({
+                    'type': 'visualization_update',
+                    'nodes': log_data.get('nodes', []),
+                    'edges': log_data.get('edges', [])
+                })
+            except Exception as e:
+                logger.error(f"Error in progress callback: {e}")
+
     async def generate_feedback(self, query: str, num_questions: int = 3) -> List[str]:
         """Generate follow-up questions to clarify research direction"""
-
-        if NEW_VERSION:
+        if self.config.report_source == ReportSource.LangChainVectorStore.value:
+            search_results = await get_vector_store_results(query, self.researcher.vector_store, self.researcher.vector_store_filter)
+        else:
             search_results = await get_search_results(query, self.researcher.retrievers[0])
-            logger.info(f"Initial web knowledge obtained: {len(search_results)} results")
+        logger.info(f"Initial web knowledge obtained: {len(search_results)} results")
 
-            # Get current time for context
-            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Get current time for context
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            messages = [
-                {"role": "system", "content": "You are an expert researcher. Your task is to analyze the original query and search results, then generate targeted questions that explore different aspects and time periods of the topic."},
-                {"role": "user",
-                "content": f"""Original query: {query}
+        messages = [
+            {"role": "system", "content": "You are an expert researcher. Your task is to analyze the original query and search results, then generate targeted questions that explore different aspects and time periods of the topic."},
+            {"role": "user",
+            "content": f"""Original query: {query}
 
 Current time: {current_time}
 
@@ -94,18 +102,13 @@ Based on these results, the original query, and the current time, generate {num_
 
 Format each question on a new line starting with 'Question: '"""}
             ]
-        else:
-            messages = [
-                {"role": "system", "content": "You are an expert researcher helping to clarify research directions."},
-                {"role": "user", "content": f"Given the following query from the user, ask some follow up questions to clarify the research direction. Return a maximum of {num_questions} questions, but feel free to return less if the original query is clear. Format each question on a new line starting with 'Question: ': {query}"}
-            ]
 
         response = await create_chat_completion(
             messages=messages,
-            llm_provider=LLM_PROVIDER,
-            model=REASONING_MODEL,  # Using reasoning model for better question generation
+            llm_provider=self.config.llm_provider,
+            model=self.config.reasoning_model,  # Using reasoning model for better question generation
             # NOTE: temperature set to 0 for reproducibility
-            # temperature=0.4,
+            temperature=0,
             max_tokens=500,
             reasoning_effort=ReasoningEfforts.High.value,
             seed=42
@@ -128,26 +131,18 @@ Format each question on a new line starting with 'Question: '"""}
         class SerpQueriesResponse(BaseModel):
             queries: List[ResearchQuery]
 
-        if NEW_VERSION:
-            messages = [
-                {"role": "system", "content": "You are an expert researcher generating search queries. Generate exactly the requested number of unique search queries with their research goals."},
-                {"role": "user",
-                    "content": f"Generate {num_queries} unique search queries to research the following topic thoroughly. For each query, provide a clear research goal that explains what specific aspect or information the query aims to uncover: {query}"}
-            ]
-        else:
-            messages = [
-                {"role": "system", "content": "You are an expert researcher generating search queries. Generate exactly the requested number of unique search queries with their research goals."},
-                # TODO: add the current date and time to the prompt
-                {"role": "user", "content": f"Generate {num_queries} unique search queries to research the following topic thoroughly. For each query, provide a clear research goal that explains what specific aspect or information the query aims to uncover: {query}"}
-            ]
+        messages = [
+            {"role": "system", "content": "You are an expert researcher generating search queries. Generate exactly the requested number of unique search queries with their research goals."},
+            {"role": "user",
+                "content": f"Generate {num_queries} unique search queries to research the following topic thoroughly. For each query, provide a clear research goal that explains what specific aspect or information the query aims to uncover: {query}"}
+        ]
 
         response = await create_chat_completion(
             messages=messages,
-            llm_provider=LLM_PROVIDER,
-            model=STANDARD_MODEL,  # Using GPT-4 for general task
+            llm_provider=self.config.llm_provider,
+            model=self.config.standard_model,  # Using GPT-4 for general task
             # NOTE: temperature set to 0 for reproducibility
             temperature=0,
-            # temperature=0.7,
             reasoning_effort=ReasoningEfforts.High.value,
             max_tokens=1000,
             seed=42,
@@ -170,26 +165,19 @@ Format each question on a new line starting with 'Question: '"""}
 
     async def process_serp_result(self, query: str, context: str, num_learnings: int = 3) -> Dict[str, List[str]]:
         """Process research results to extract learnings and follow-up questions"""
-        if NEW_VERSION:
-            messages = [
-                {"role": "system", "content": "You are an expert researcher analyzing search results."},
-                {"role": "user",
-                "content": f"Given the following research results for the query '{query}', extract key learnings and suggest follow-up questions. For each learning, include a citation to the source URL if available. Format each learning as 'Learning [source_url]: <insight>' and each question as 'Question: <question>':\n\n{context}"}
-            ]
-        else:
-            messages = [
-                {"role": "system", "content": "You are an expert researcher analyzing search results."},
-                {"role": "user", "content": f"Given the following research results for the query '{query}', extract key learnings and suggest follow-up questions. For each learning, include a citation to the source URL if available. Format each learning as 'Learning [source_url]: <insight>' and each question as 'Question: <question>':\n\n{context}"}
-            ]
-
+        messages = [
+            {"role": "system", "content": "You are an expert researcher analyzing search results."},
+            {"role": "user",
+            "content": f"Given the following research results for the query '{query}', extract key learnings and suggest follow-up questions. For each learning, include a citation to the source URL if available. Format each learning as 'Learning [source_url]: <insight>' and each question as 'Question: <question>':\n\n{context}"}
+        ]
 
         response = await create_chat_completion(
             messages=messages,
-            llm_provider=LLM_PROVIDER,
-            model=REASONING_MODEL,  # Using reasoning model for analysis
+            llm_provider=self.config.llm_provider,
+            model=self.config.reasoning_model,  # Using reasoning model for analysis
             # NOTE: temperature set to 0 for reproducibility
-            # temperature=0.7,
             temperature=0,
+            # temperature=0.7,
             max_tokens=1000,
             reasoning_effort=ReasoningEfforts.High.value,
             seed=42
@@ -205,7 +193,6 @@ Format each question on a new line starting with 'Question: '"""}
             line = line.strip()
             if line.startswith('Learning'):
                 # Extract URL if present in square brackets
-                import re
                 url_match = re.search(r'\[(.*?)\]:', line)
                 if url_match:
                     url = url_match.group(1)
@@ -241,7 +228,7 @@ Format each question on a new line starting with 'Question: '"""}
         citations: Dict[str, str] = None,
         visited_urls: Set[str] = None,
         on_progress = None,
-        parent_node_id: Optional[int] = None  # New parameter for tracking parent node
+        parent_node_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """Conduct deep iterative research"""
         logger.debug(f"[DeepResearch] deep_research called with query: {query[:100]}..., breadth: {breadth}, depth: {depth}")
@@ -323,7 +310,8 @@ Format each question on a new line starting with 'Question: '"""}
                     researcher = GPTResearcher(
                         query=serp_query['query'],
                         report_type=ReportType.ResearchReport.value,
-                        report_source=ReportSource.Web.value,
+                        report_source=self.config.report_source,
+                        vector_store=load_vector_db("vector_db") if self.config.report_source == ReportSource.LangChainVectorStore.value else None,
                         tone=self.tone,
                         websocket=self.websocket,
                         config_path=self.config_path,
@@ -425,7 +413,7 @@ Format each question on a new line starting with 'Question: '"""}
             logger.debug(f"[DeepResearch] Collected result from node {node_id}: {len(result['learnings'])} learnings, {len(result['visited_urls'])} URLs")
 
             # Continue deeper if needed
-            if depth < MAX_DEPTH: # max_depth is the maximum depth of the research
+            if depth < self.config.max_depth: # max_depth is the maximum depth of the research
                 logger.debug(f"[DeepResearch] Starting deeper research for node {node_id}")
                 new_breadth = max(2, breadth // 2)
                 new_depth = depth + 1
@@ -550,7 +538,13 @@ Format each question on a new line starting with 'Question: '"""}
         context_with_citations = trim_context_to_word_limit(context_with_citations)
         
         # Set enhanced context and visited URLs
-        self.researcher.context = "\n".join(context_with_citations)
+        self.researcher.context = """"""
+        for context in context_with_citations:
+            if isinstance(context, str):
+                self.researcher.context += f"{context}\n"
+            elif isinstance(context, list):
+                self.researcher.context += "\n".join(context) + "\n"
+        self.researcher.context = self.researcher.context.strip()
         self.researcher.visited_urls = results['visited_urls']
 
         # Set research sources
@@ -567,7 +561,6 @@ Format each question on a new line starting with 'Question: '"""}
 
         if len(results['visited_urls']) == 0:
             logger.error(f"[DeepResearch] No visited URLs found - research failed!")
-            raise ValueError("No relevant information found, no Deep Research Report generated")
 
         logger.debug(f"[DeepResearch] Generating final report...")
 

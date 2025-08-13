@@ -7,8 +7,14 @@ import multiprocessing as mp
 from pathlib import Path
 from typing import List, Tuple, NamedTuple
 import glob
+import sys
+import io
+from contextlib import redirect_stdout, redirect_stderr
+import csv
+import threading
+from tqdm import tqdm
 
-from modified_parallel_deep_research import DeepResearch
+from modified_deep_research import DeepResearch
 
 
 class ProcessResult(NamedTuple):
@@ -17,6 +23,25 @@ class ProcessResult(NamedTuple):
     success: bool
     error_message: str
     duration_seconds: float
+
+
+# Global lock for CSV writing
+csv_lock = threading.Lock()
+
+def write_to_csv(csv_file_path: str, result: ProcessResult):
+    """Thread-safe function to write a single result to CSV"""
+    with csv_lock:
+        file_exists = os.path.exists(csv_file_path)
+        with open(csv_file_path, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            # Write header if file doesn't exist
+            if not file_exists:
+                writer.writerow(["question_file", "duration_seconds", "status", "error_message"])
+            
+            # Write the result
+            status = "success" if result.success else "failed"
+            error_msg = result.error_message.replace(',', ';').replace('\n', ' ')  # Clean CSV format
+            writer.writerow([Path(result.question_file).name, f"{result.duration_seconds:.2f}", status, error_msg])
 
 
 def setup_environment():
@@ -61,44 +86,78 @@ async def process_single_question(question_file: str, output_dir: str, config_pa
         logs_dir = os.path.join(output_dir, "logs", base_name)
         os.makedirs(logs_dir, exist_ok=True)
         
-        # Setup logging for this process
+        # Setup logging for this process - capture ALL logging
         log_file = os.path.join(logs_dir, f"{base_name}.log")
-        logging.basicConfig(
-            filename=log_file,
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            force=True
-        )
         
-        # Initialize deep researcher
-        deep_researcher = DeepResearch(
-            query=question,
-            config_path=config_path,
-            logs_dir=logs_dir
-        )
+        # Configure root logger to capture everything
+        root_logger = logging.getLogger()
+        root_logger.handlers.clear()  # Clear any existing handlers
         
-        # Run the research
-        print(f"Processing: {question_file} -> {output_file}")
-        report = await deep_researcher.run()
+        file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)
+        root_logger.setLevel(logging.DEBUG)
+        
+        # Create string buffers to capture stdout/stderr
+        stdout_buffer = io.StringIO()
+        stderr_buffer = io.StringIO()
+        
+        try:
+            # Redirect stdout and stderr to capture all console output
+            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+                # Initialize deep researcher
+                deep_researcher = DeepResearch(
+                    query=question,
+                    config_path=config_path,
+                    logs_dir=logs_dir
+                )
+                
+                # Run the research
+                root_logger.info(f"Starting research for: {question_file}")
+                report = await deep_researcher.run()
+                root_logger.info(f"Research completed for: {question_file}")
+        
+        finally:
+            # Write captured stdout/stderr to log file
+            stdout_content = stdout_buffer.getvalue()
+            stderr_content = stderr_buffer.getvalue()
+            
+            if stdout_content:
+                root_logger.info("=== CAPTURED STDOUT ===")
+                for line in stdout_content.splitlines():
+                    root_logger.info(f"STDOUT: {line}")
+                    
+            if stderr_content:
+                root_logger.error("=== CAPTURED STDERR ===")
+                for line in stderr_content.splitlines():
+                    root_logger.error(f"STDERR: {line}")
         
         # Save the report
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write(report)
         
         duration = time.time() - start_time
-        print(f"Completed: {question_file} (took {duration:.2f}s)")
+        root_logger.info(f"Completed research for {question_file} in {duration:.2f}s")
         return ProcessResult(question_file, True, "", duration)
         
     except Exception as e:
         duration = time.time() - start_time
         error_msg = f"Error processing {question_file}: {str(e)}"
-        print(error_msg)
+        
+        # Try to log the error if logger is available
+        try:
+            logging.error(error_msg)
+        except:
+            pass
+            
         return ProcessResult(question_file, False, error_msg, duration)
 
 
-def run_single_process(args: Tuple[str, str, str]) -> ProcessResult:
+def run_single_process(args: Tuple[str, str, str, str]) -> ProcessResult:
     """Wrapper function to run async process_single_question in a separate process"""
-    question_file, output_dir, config_path = args
+    question_file, output_dir, config_path, csv_file_path = args
     
     try:
         # Setup environment in each process
@@ -109,6 +168,10 @@ def run_single_process(args: Tuple[str, str, str]) -> ProcessResult:
         asyncio.set_event_loop(loop)
         try:
             result = loop.run_until_complete(process_single_question(question_file, output_dir, config_path))
+            
+            # Write result to CSV immediately after completion
+            write_to_csv(csv_file_path, result)
+            
             return result
         finally:
             loop.close()
@@ -116,8 +179,39 @@ def run_single_process(args: Tuple[str, str, str]) -> ProcessResult:
     except Exception as e:
         # Extra safety net: catch any exceptions that might not be pickleable
         error_msg = f"Process-level error for {question_file}: {str(e)}"
-        print(error_msg)
-        return ProcessResult(question_file, False, error_msg, 0.0)
+        result = ProcessResult(question_file, False, error_msg, 0.0)
+        
+        # Write failed result to CSV
+        try:
+            write_to_csv(csv_file_path, result)
+        except:
+            pass
+            
+        return result
+
+
+def update_progress_bar(result: ProcessResult, pbar: tqdm, stats: dict):
+    """Update progress bar with result information"""
+    # Update statistics
+    if result.success:
+        stats['successful'] += 1
+        status_symbol = "✓"
+    else:
+        stats['failed'] += 1
+        status_symbol = "✗"
+    
+    stats['total_time'] += result.duration_seconds
+    
+    # Calculate averages
+    completed = stats['successful'] + stats['failed']
+    avg_time = stats['total_time'] / completed if completed > 0 else 0
+    
+    # Update progress bar description
+    pbar.set_description(
+        f"Success: {stats['successful']} | Failed: {stats['failed']} | "
+        f"Avg: {avg_time:.1f}s | Last: {status_symbol} {Path(result.question_file).name} ({result.duration_seconds:.1f}s)"
+    )
+    pbar.update(1)
 
 
 def find_question_files(directory: str) -> List[str]:
@@ -158,41 +252,38 @@ if __name__ == "__main__":
     # Determine number of processes
     num_processes = min(args.workers, mp.cpu_count())
     print(f"Using {num_processes} processes")
+    print(f"Detailed logs will be saved in individual log files under {args.output_dir}/logs/")
     
-    # Prepare arguments for multiprocessing
-    process_args = [(qf, args.output_dir, args.config) for qf in question_files]
+    # Setup CSV file path for dynamic updates
+    timing_csv_file = os.path.join(args.output_dir, "timing_details.csv")
+
+    # Ensure CSV file is empty
+    if os.path.exists(timing_csv_file):
+        os.remove(timing_csv_file)
     
-    # Start processing
+    # Prepare arguments for multiprocessing (include CSV path)
+    process_args = [(qf, args.output_dir, args.config, timing_csv_file) for qf in question_files]
+    
+    # Start processing with progress bar
     start_time = time.time()
-    successful = 0
-    failed = 0
+    stats = {'successful': 0, 'failed': 0, 'total_time': 0.0}
     question_durations = []
     
-    print(f"Starting batch processing of {len(question_files)} files...")
+    print(f"\nStarting batch processing of {len(question_files)} files...")
     
-    with mp.Pool(processes=num_processes) as pool:
-        # Process files and track progress
-        results = []
-        for i, result in enumerate(pool.imap(run_single_process, process_args)):
-            results.append(result)
-            question_durations.append(result.duration_seconds)
-            
-            if result.success:
-                successful += 1
-            else:
-                failed += 1
-                print(f"FAILED: {result.question_file} - {result.error_message}")
-            
-            # Progress update
-            progress = (i + 1) / len(question_files) * 100
-            elapsed = time.time() - start_time
-            eta = (elapsed / (i + 1)) * (len(question_files) - i - 1) if i > 0 else 0
-            avg_time_per_question = sum(question_durations) / len(question_durations)
-            
-            print(f"Progress: {i+1}/{len(question_files)} ({progress:.1f}%) | "
-                  f"Success: {successful} | Failed: {failed} | "
-                  f"Last: {result.duration_seconds:.1f}s | Avg: {avg_time_per_question:.1f}s | "
-                  f"Elapsed: {elapsed:.1f}s | ETA: {eta:.1f}s")
+    # Initialize progress bar
+    with tqdm(total=len(question_files), desc="Processing", ncols=120, 
+              bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {desc}') as pbar:
+        
+        with mp.Pool(processes=num_processes) as pool:
+            # Process files and track progress
+            results = []
+            for result in pool.imap(run_single_process, process_args):
+                results.append(result)
+                question_durations.append(result.duration_seconds)
+                
+                # Update progress bar
+                update_progress_bar(result, pbar, stats)
     
     # Final summary
     total_time = time.time() - start_time
@@ -211,8 +302,8 @@ if __name__ == "__main__":
     
     print(f"\n=== BATCH PROCESSING COMPLETE ===")
     print(f"Total files: {len(question_files)}")
-    print(f"Successful: {successful}")
-    print(f"Failed: {failed}")
+    print(f"Successful: {stats['successful']}")
+    print(f"Failed: {stats['failed']}")
     print(f"Total time: {total_time:.2f} seconds")
     print(f"Average time per file: {total_time/len(question_files):.2f} seconds")
     print(f"\n=== TIMING STATISTICS ===")
@@ -235,8 +326,8 @@ if __name__ == "__main__":
         f.write(f"Config File: {args.config}\n")
         f.write(f"Processes Used: {num_processes}\n")
         f.write(f"Total Files: {len(question_files)}\n")
-        f.write(f"Successful: {successful}\n")
-        f.write(f"Failed: {failed}\n")
+        f.write(f"Successful: {stats['successful']}\n")
+        f.write(f"Failed: {stats['failed']}\n")
         f.write(f"Total Time: {total_time:.2f} seconds\n")
         f.write(f"Average Time per File: {total_time/len(question_files):.2f} seconds\n\n")
         
@@ -264,16 +355,8 @@ if __name__ == "__main__":
             if not result.success:
                 f.write(f"  {result.question_file}: {result.error_message}\n")
     
-    # Save detailed timing information to CSV
-    timing_csv_file = os.path.join(args.output_dir, "timing_details.csv")
-    with open(timing_csv_file, 'w') as f:
-        f.write("question_file,duration_seconds,status,error_message\n")
-        for result in results:
-            status = "success" if result.success else "failed"
-            error_msg = result.error_message.replace(',', ';').replace('\n', ' ')  # Clean CSV format
-            f.write(f"{Path(result.question_file).name},{result.duration_seconds:.2f},{status},\"{error_msg}\"\n")
-    
     print(f"\nDetailed reports saved:")
     print(f"  Summary: {summary_file}")
-    print(f"  Timing details: {timing_csv_file}")
+    print(f"  Real-time timing details: {timing_csv_file}")
+    print(f"  Individual logs: {args.output_dir}/logs/")
 

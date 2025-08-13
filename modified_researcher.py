@@ -277,7 +277,14 @@ class ResearchConductor:
                 for sub_query in sub_queries
             ]
         )
-        return context
+        
+        if context:
+            combined_context = " ".join(context)
+            self.logger.info(f"Combined context size: {len(combined_context)}")
+            self.logger.debug(f"[ResearchConductor] Combined context successfully, length: {len(combined_context)}")
+            return combined_context
+        self.logger.warning(f"[ResearchConductor] No context found after filtering")
+        return ""
 
     async def _get_context_by_web_search(self, query, scraped_data: list | None = None, query_domains: list | None = None):
         """
@@ -355,15 +362,6 @@ class ResearchConductor:
             return []
         except Exception as e:
             raise e
-            # self.logger.error(f"Error during web search: {e}", exc_info=True)
-            # if self.enhanced_logger:
-            #     self.enhanced_logger.update_node(
-            #         node_id=subquery_node_id,
-            #         status="error",
-            #         results={"error": str(e)},
-            #         end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            #     )
-            # return []
 
     async def _process_sub_query(self, sub_query: str, scraped_data: list = [], query_domains: list = [], concurrent_group: str = None):
         """Takes in a sub query and scrapes urls based on it and gathers context."""
@@ -438,15 +436,6 @@ class ResearchConductor:
             return content, subquery_node_id
         except Exception as e:
             raise e
-            self.logger.error(f"Error processing sub-query {sub_query}: {e}", exc_info=True)
-            if self.enhanced_logger:
-                self.enhanced_logger.update_node(
-                    node_id=subquery_node_id,
-                    status="error",
-                    results={"error": str(e)},
-                    end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                )
-            return ""
 
     async def _process_sub_query_with_vectorstore(self, sub_query: str, filter: dict | None = None):
         """Takes in a sub query and gathers context from the user provided vector store

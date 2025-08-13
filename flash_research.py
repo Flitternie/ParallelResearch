@@ -2,22 +2,15 @@ from typing import List, Dict, Any, Optional, Set
 from fastapi import WebSocket
 import asyncio
 import logging
-import time
 from datetime import datetime, timedelta
 import traceback
-import re
 from pydantic import BaseModel
-from enum import Enum
 
-# NOTE: This is a modified version of the GPTResearcher class
-# from gpt_researcher.agent import GPTResearcher
-from modified_parallel_deep_research import DeepResearch, AsyncTaskManager, AsyncQueryTask, TaskState, AsyncProgress
+from modified_parallel_deep_research import ParallelizedDeepResearch, AsyncTaskManager, AsyncQueryTask, TaskState, AsyncProgress
 from modified_agent import GPTResearcher
-from modified_researcher import get_vector_store_results
 from gpt_researcher.llm_provider.generic.base import ReasoningEfforts
 from gpt_researcher.utils.llm import create_chat_completion
 from gpt_researcher.utils.enum import ReportType, ReportSource, Tone
-from gpt_researcher.actions.query_processing import get_search_results
 
 from build_vector_db import load_vector_db
 from utils import Config, ResearchLogger, ResearchProgress, trim_context_to_word_limit
@@ -247,8 +240,7 @@ Should we continue to depth {current_depth + 1}?"""}
         return response
 
 
-class FlashResearch(DeepResearch):
-    # same constructor as DeepResearch
+class FlashResearch(ParallelizedDeepResearch):
     def __init__(
         self,
         query: str,
@@ -429,7 +421,7 @@ class FlashResearch(DeepResearch):
                     report_type=ReportType.ResearchReport.value,
                     report_source=self.config.report_source,
                     # NOTE: Using the langchain vector store
-                    # vector_store=load_vector_db("vector_db"),
+                    vector_store=load_vector_db("vector_db") if self.config.report_source == ReportSource.LangChainVectorStore.value else None,
                     tone=self.tone,
                     websocket=self.websocket,
                     config_path=self.config_path,
