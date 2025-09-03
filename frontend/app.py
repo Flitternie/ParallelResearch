@@ -14,14 +14,46 @@ import weakref
 # Setup logging
 logger = logging.getLogger(__name__)
 
+# Get configuration from environment variables (set by frontend.py launcher)
+run_config = os.environ.get('FRONTEND_CONFIG_PATH', './config.json')
+research_module_name = os.environ.get('FRONTEND_RESEARCH_MODULE', 'flash_research_runtime')
+
+# Dynamic import of the research module
+DeepResearch = None
+ResearchVisualizer = None
+
+def load_research_module(module_name):
+    """Dynamically load the specified research module"""
+    global DeepResearch
+    
+    try:
+        if module_name == 'baseline':
+            from modified_deep_research import DeepResearch
+        elif module_name == 'parallel':
+            from modified_parallel_deep_research import ParallelizedDeepResearch as DeepResearch
+        elif module_name == 'recursive':
+            from recursive_deep_research import DeepResearch
+        elif module_name == 'runtime':
+            from flash_research_runtime import FlashResearchRuntime as DeepResearch
+        else:
+            logger.error(f"Unknown research module: {module_name}")
+            return False
+            
+        logger.info(f"Successfully loaded research module: {module_name}")
+        return True
+    except ImportError as e:
+        logger.error(f"Failed to import research module {module_name}: {e}")
+        return False
+
+# Load the specified research module
+load_research_module(research_module_name)
+
+# Try to load visualizer
 try:
-    from flash_research import FlashResearch as DeepResearch
     from research_visualizer_d3 import ResearchVisualizer
 except ImportError as e:
-    logger.error(f"Import error: {e}")
-    DeepResearch = None
+    logger.error(f"Import error for visualizer: {e}")
     ResearchVisualizer = None
-
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-here'
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
@@ -36,7 +68,8 @@ def setup_environment():
         os.environ["OPENAI_BASE_URL"] = open("openai_url.key").read().strip()
         os.environ["BRAVE_API_KEY"] = open("./brave.key").read().strip()
         os.environ["CUSTOM_EMBED_API_KEY"] = open("./openai.key").read().strip()
-        os.environ["CUSTOM_EMBED_BASE_URL"] = open("openai_url.key").read().strip()
+        # os.environ["CUSTOM_EMBED_BASE_URL"] = open("openai_url.key").read().strip()
+        os.environ["CUSTOM_EMBED_BASE_URL"] = "http://0.0.0.0:8000/v1/"
         return True
     except Exception as e:
         logger.error(f"Error setting up environment: {e}")
@@ -69,12 +102,14 @@ def run_async_research(session_id: str, query: str, config_path: str, logs_dir: 
                         visualizer = ResearchVisualizer(event.src_path)
                         log_data = visualizer.load_log()
                         if log_data and 'nodes' in log_data:
+                            # Convert nodes dictionary to array for frontend compatibility
+                            nodes_array = list(log_data['nodes'].values()) if isinstance(log_data['nodes'], dict) else log_data['nodes']
                             socketio.emit('visualization_update', {
                                 'session_id': self.session_id,
-                                'nodes': log_data['nodes'],
+                                'nodes': nodes_array,
                                 'edges': log_data.get('edges', [])
                             }, room=self.session_id)
-                            logger.info(f"Sent visualization update with {len(log_data['nodes'])} nodes")
+                            logger.info(f"Sent visualization update with {len(nodes_array)} nodes")
                 except Exception as e:
                     logger.error(f"Error updating visualization: {e}")
     
@@ -126,15 +161,37 @@ def run_async_research(session_id: str, query: str, config_path: str, logs_dir: 
             # Create progress callback for direct logger updates
             def on_logger_update(update_data):
                 if update_data.get('type') == 'visualization_update':
+                    # Convert nodes dictionary to array for frontend compatibility
+                    nodes_data = update_data.get('nodes', [])
+                    nodes_array = list(nodes_data.values()) if isinstance(nodes_data, dict) else nodes_data
                     socketio.emit('visualization_update', {
                         'session_id': session_id,
-                        'nodes': update_data.get('nodes', []),
+                        'nodes': nodes_array,
                         'edges': update_data.get('edges', [])
                     }, room=session_id)
-                    logger.info(f"Sent visualization update with {len(update_data.get('nodes', []))} nodes")
+                    logger.info(f"Sent visualization update with {len(nodes_array)} nodes")
+                    
+                    # Send status change notification if present
+                    if 'status_notification' in update_data:
+                        notification = update_data['status_notification']
+                        node_id = notification['node_id']
+                        new_status = notification['new_status']
+                        node_query = notification['node_query'][:100] + "..." if len(notification['node_query']) > 100 else notification['node_query']
+                        
+                        status_icon = "🔴" if new_status == "terminated" else "⚠️"  # Red circle for terminated, warning for cancelled
+                        message = f"{status_icon} Node {node_id} {new_status}: {node_query}"
+                        
+                        socketio.emit('status_notification', {
+                            'session_id': session_id,
+                            'type': 'warning' if new_status == 'cancelled' else 'error',
+                            'message': message,
+                            'node_id': node_id,
+                            'status': new_status
+                        }, room=session_id)
+                        logger.info(f"Sent status notification for node {node_id}: {new_status}")
 
             # Create research instance with progress callback
-            # NOTE: Depth will be taken from config.json (MAX_DEPTH)
+            # NOTE: Depth will be taken from CONFIG (MAX_DEPTH)
             logger.info(f"Creating DeepResearch instance with query: {query[:100]}...")
             logger.info(f"Using config file: {config_path}")
             
@@ -180,9 +237,11 @@ def run_async_research(session_id: str, query: str, config_path: str, logs_dir: 
                             if os.path.exists(f"{logs_dir}/progress.json"):
                                 log_data = visualizer.load_log()
                                 if log_data and 'nodes' in log_data:
+                                    # Convert nodes dictionary to array for frontend compatibility
+                                    nodes_array = list(log_data['nodes'].values()) if isinstance(log_data['nodes'], dict) else log_data['nodes']
                                     socketio.emit('visualization_update', {
                                         'session_id': session_id,
-                                        'nodes': log_data['nodes'],
+                                        'nodes': nodes_array,
                                         'edges': log_data.get('edges', [])
                                     }, room=session_id)
                     except Exception as e:
@@ -197,9 +256,11 @@ def run_async_research(session_id: str, query: str, config_path: str, logs_dir: 
                             visualizer = ResearchVisualizer(f"{logs_dir}/progress.json")
                             log_data = visualizer.load_log()
                             if log_data and 'nodes' in log_data:
+                                # Convert nodes dictionary to array for frontend compatibility
+                                nodes_array = list(log_data['nodes'].values()) if isinstance(log_data['nodes'], dict) else log_data['nodes']
                                 socketio.emit('visualization_update', {
                                     'session_id': session_id,
-                                    'nodes': log_data['nodes'],
+                                    'nodes': nodes_array,
                                     'edges': log_data.get('edges', [])
                                 }, room=session_id)
                     except Exception as e:
@@ -304,13 +365,48 @@ def run_async_research(session_id: str, query: str, config_path: str, logs_dir: 
 @app.route('/')
 def index():
     """Main application page"""
-    return render_template('index.html')
+    # Create a friendly display name for the research module
+    module_display_names = {
+        'runtime': 'Flash Research',
+        'baseline': 'Deep Research',
+        'parallel': 'Parallel Research',
+        'recursive': 'Parallel Research'
+    }
+    
+    # Different icons for different modules
+    module_icons = {
+        'runtime': '⚡️',
+        'baseline': '🔬',
+        'parallel': '🚀',
+        'recursive': '🚀'
+    }
+    
+    display_name = module_display_names.get(research_module_name, research_module_name.replace('_', ' ').title())
+    icon = module_icons.get(research_module_name, '🔬')
+    
+    return render_template('index.html', 
+                         research_module=research_module_name,
+                         display_name=display_name,
+                         config_path=run_config,
+                         icon=icon)
+
+@app.route('/api/config')
+def get_config_info():
+    """Get current configuration information"""
+    return jsonify({
+        'config_path': run_config,
+        'research_module': research_module_name,
+        'research_module_available': DeepResearch is not None,
+        'visualizer_available': ResearchVisualizer is not None
+    })
 
 @app.route('/api/start_research', methods=['POST'])
 def start_research():
     """Start a new research session"""
     if DeepResearch is None:
-        return jsonify({'error': 'Research modules not available. Please check dependencies.'}), 500
+        return jsonify({
+            'error': f'Research module "{research_module_name}" not available. Please check dependencies.'
+        }), 500
         
     if not setup_environment():
         return jsonify({'error': 'Failed to setup environment. Check API keys.'}), 500
@@ -320,6 +416,8 @@ def start_research():
     
     if not query:
         return jsonify({'error': 'Query is required'}), 400
+    
+    logger.info(f"Starting research with module: {research_module_name}, config: {run_config}")
     
     # Generate session ID and create logs directory
     session_id = str(uuid.uuid4())
@@ -336,13 +434,14 @@ def start_research():
         'status': 'initializing',
         'logs_dir': logs_dir,
         'start_time': datetime.now().isoformat(),
-        'config_path': './config.json'
+        'config_path': run_config,
+        'research_module': research_module_name
     }
     
     # Start research in background thread
     research_thread = Thread(
         target=run_async_research,
-        args=(session_id, query, './config.json', logs_dir)
+        args=(session_id, query, run_config, logs_dir)
     )
     research_thread.daemon = True
     research_thread.start()
@@ -350,7 +449,9 @@ def start_research():
     return jsonify({
         'session_id': session_id,
         'status': 'initializing',
-        'message': 'Research session started'
+        'message': f'Research session started using {research_module_name}',
+        'config_path': run_config,
+        'research_module': research_module_name
     })
 
 @app.route('/api/session/<session_id>/status')
@@ -366,7 +467,9 @@ def get_session_status(session_id: str):
         'query': session['query'],
         'start_time': session['start_time'],
         'report': session.get('report', ''),
-        'error': session.get('error', '')
+        'error': session.get('error', ''),
+        'config_path': session.get('config_path', run_config),
+        'research_module': session.get('research_module', research_module_name)
     })
 
 @app.route('/api/session/<session_id>/visualization')
@@ -386,8 +489,11 @@ def get_visualization_data(session_id: str):
         if os.path.exists(progress_file):
             visualizer = ResearchVisualizer(progress_file)
             log_data = visualizer.load_log()
+            # Convert nodes dictionary to array for frontend compatibility
+            nodes_data = log_data.get('nodes', [])
+            nodes_array = list(nodes_data.values()) if isinstance(nodes_data, dict) else nodes_data
             return jsonify({
-                'nodes': log_data.get('nodes', []),
+                'nodes': nodes_array,
                 'edges': log_data.get('edges', []),
                 'start_time': log_data.get('start_time', '')
             })

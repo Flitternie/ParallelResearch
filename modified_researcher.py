@@ -62,8 +62,13 @@ class ResearchConductor:
         # NOTE: Use vector store if report_source is LangChainVectorStore for initial planning
         if self.researcher.report_source == ReportSource.LangChainVectorStore.value:
             search_results = await get_vector_store_results(query, self.researcher.vector_store, self.researcher.vector_store_filter)
+            for result in search_results:
+                if result.get("href") not in self.researcher.visited_urls:
+                    self.researcher.visited_urls.add(result.get("href"))
         else:
             search_results = await get_search_results(query, self.researcher.retrievers[0], query_domains)
+        if search_results is None:
+            search_results = []
         self.logger.info(f"Initial search results obtained: {len(search_results)} results")
         self.logger.debug(f"[ResearchConductor] Got {len(search_results)} initial search results")
 
@@ -248,7 +253,7 @@ class ResearchConductor:
 
     async def _get_context_by_vectorstore(self, query, filter: dict | None = None):
         """
-        Generates the context for the research task by searching the vectorstore
+        Generates the context for the research task by searching the vectorstore with real-time updates
         Returns:
             context: List of context
         """
@@ -270,19 +275,24 @@ class ResearchConductor:
                 sub_queries,
             )
 
-        # Using asyncio.gather to process the sub_queries asynchronously
-        context = await asyncio.gather(
-            *[
-                self._process_sub_query_with_vectorstore(sub_query, filter)
-                for sub_query in sub_queries
-            ]
-        )
+        # Process sub-queries sequentially for real-time updates
+        combined_context = []
+        for sub_query in sub_queries:
+            try:
+                content = await self._process_sub_query_with_vectorstore(sub_query, filter)
+                if content:
+                    combined_context.append(content)
+                    # Update context in real-time
+                    await self.researcher._update_context(content)
+            except Exception as e:
+                self.logger.warning(f"Error processing sub-query {sub_query}: {e}")
+                continue
         
-        if context:
-            combined_context = " ".join(context)
-            self.logger.info(f"Combined context size: {len(combined_context)}")
-            self.logger.debug(f"[ResearchConductor] Combined context successfully, length: {len(combined_context)}")
-            return combined_context
+        if combined_context:
+            final_context = " ".join(combined_context)
+            self.logger.info(f"Combined context size: {len(final_context)}")
+            self.logger.debug(f"[ResearchConductor] Combined context successfully, length: {len(final_context)}")
+            return final_context
         self.logger.warning(f"[ResearchConductor] No context found after filtering")
         return ""
 
@@ -543,10 +553,13 @@ class ResearchConductor:
                 self.researcher.websocket,
             )
 
-        # Scrape the new URLs
+        # Scrape the new URLs with real-time updates
         self.logger.debug(f"[ResearchConductor] Starting to scrape {len(new_search_urls)} URLs")
         scraped_content = await self.researcher.scraper_manager.browse_urls(new_search_urls)
         self.logger.debug(f"[ResearchConductor] Scraped {len(scraped_content)} content items from URLs")
+
+        # Process URLs one by one for real-time updates
+        await self.researcher._update_context(scraped_content)
 
         if self.researcher.vector_store:
             self.researcher.vector_store.load(scraped_content)

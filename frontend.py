@@ -7,6 +7,46 @@ import sys
 import os
 import subprocess
 import importlib.util
+import argparse
+
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        description='Deep Research Frontend Launcher',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        '--config', 
+        type=str, 
+        default='./config.json',
+        help='Path to the config file'
+    )
+    parser.add_argument(
+        '--version',
+        type=str,
+        required=True,
+        choices=['baseline', 'parallel', 'recursive', 'runtime'],
+        help='Deep research module to use'
+    )
+    parser.add_argument(
+        '--port',
+        type=int,
+        default=5000,
+        help='Port to run the server on (default: 5000)'
+    )
+    parser.add_argument(
+        '--host',
+        type=str,
+        default='0.0.0.0',
+        help='Host to bind to (default: 0.0.0.0)'
+    )
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Enable debug mode'
+    )
+    
+    return parser.parse_args()
 
 def check_and_install_package(package_name, pip_name=None):
     """Check if a package is installed, install if not"""
@@ -45,8 +85,35 @@ def check_api_keys():
         print("Created dummy key files for testing.")
 
 def main():
+    # Parse command line arguments
+    args = parse_arguments()
+    
     print("🔬 Deep Research Frontend - Development Launcher")
     print("=" * 50)
+    print(f"Config file: {args.config}")
+    print(f"Research module: {args.version}")
+    print(f"Server: {args.host}:{args.port}")
+    print("=" * 50)
+    
+    # Validate config file exists
+    if not os.path.exists(args.config):
+        print(f"❌ Config file not found: {args.config}")
+        return 1
+    
+    # Validate research module can be imported
+    try:
+        if args.version == 'flash_research_runtime':
+            import flash_research_runtime
+        elif args.version == 'modified_deep_research':
+            import modified_deep_research
+        elif args.version == 'modified_parallel_deep_research':
+            import modified_parallel_deep_research
+        elif args.version == 'recursive_deep_research':
+            import recursive_deep_research
+        print(f"✅ Research module '{args.version}' is available")
+    except ImportError as e:
+        print(f"❌ Research module '{args.version}' cannot be imported: {e}")
+        return 1
     
     # Check and install required packages
     packages = [
@@ -68,14 +135,18 @@ def main():
     os.makedirs("logs", exist_ok=True)
     
     print("\n🚀 Starting the application...")
-    print("Open http://localhost:5000 in your browser")
+    print(f"Open http://localhost:{args.port} in your browser")
     print("Press Ctrl+C to stop")
     print("=" * 50)
+    
+    # Set environment variables for the app
+    os.environ['FRONTEND_CONFIG_PATH'] = args.config
+    os.environ['FRONTEND_RESEARCH_MODULE'] = args.version
     
     # Import and run the app
     try:
         from frontend.app import app, socketio
-        socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+        socketio.run(app, debug=args.debug, host=args.host, port=args.port)
     except KeyboardInterrupt:
         print("\n👋 Shutting down...")
     except Exception as e:

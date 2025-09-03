@@ -7,7 +7,6 @@ from datetime import datetime
 import traceback
 from enum import Enum
 
-# NOTE: This is a modified version of the GPTResearcher class
 from modified_deep_research import DeepResearch
 from modified_agent import GPTResearcher
 from gpt_researcher.utils.enum import ReportType, ReportSource, Tone
@@ -25,7 +24,6 @@ class TaskState(Enum):
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     FAILED = "failed"
-
 
 class AsyncProgress:
     """Async-safe progress tracking"""
@@ -197,8 +195,8 @@ class AsyncTaskManager:
             for task in self.active_tasks.values():
                 if task.cancel():
                     cancelled_count += 1
-            logger.info(f"Cancelled {cancelled_count} active tasks")
-    
+            logger.info(f"[Parallelized DeepResearch] Cancelled {cancelled_count} active tasks")
+
     async def get_all_data(self) -> Dict[str, Any]:
         async with self._lock:
             return {
@@ -208,6 +206,7 @@ class AsyncTaskManager:
                 'context': self.context.copy(),
                 'sources': self.sources.copy()
             }
+
 
 
 class ParallelizedDeepResearch(DeepResearch):
@@ -248,7 +247,7 @@ class ParallelizedDeepResearch(DeepResearch):
         parent_node_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """Async-based parallel research using asyncio task management"""
-        logger.debug(f"[DeepResearch] async parallel research called with query: {query[:100]}..., breadth: {breadth}, depth: {depth}")
+        logger.debug(f"[Parallelized DeepResearch] async parallel research called with query: {query[:100]}..., breadth: {breadth}, depth: {depth}")
         
         # Initialize async task manager and progress tracker
         task_manager = AsyncTaskManager()
@@ -278,7 +277,7 @@ class ParallelizedDeepResearch(DeepResearch):
         # Generate initial queries (NOTE: Controlled by BREADTH)
         serp_queries = await self.generate_serp_queries(query, num_queries=breadth)
         
-        logger.debug(f"[DeepResearch] Generated {len(serp_queries)} initial queries")
+        logger.debug(f"[Parallelized DeepResearch] Generated {len(serp_queries)} initial queries")
         
         # Create and launch initial async tasks
         tasks = []
@@ -296,7 +295,7 @@ class ParallelizedDeepResearch(DeepResearch):
             query_task.asyncio_task = asyncio_task
             tasks.append(asyncio_task)
 
-        logger.debug(f"[DeepResearch] All initial tasks launched, waiting for completion...")
+        logger.debug(f"[Parallelized DeepResearch] All initial tasks launched, waiting for completion...")
         
         # Wait for all tasks (including recursive ones) to complete
         await self._wait_for_all_tasks_completion(task_manager)
@@ -306,7 +305,7 @@ class ParallelizedDeepResearch(DeepResearch):
         
         # Trim context to stay within word limits
         trimmed_context = trim_context_to_word_limit(final_data['context'])
-        logger.info(f"Trimmed context from {len(final_data['context'])} items to {len(trimmed_context)} items")
+        logger.info(f"[Parallelized DeepResearch] Trimmed context from {len(final_data['context'])} items to {len(trimmed_context)} items")
         final_data['context'] = trimmed_context
 
         # Log completion
@@ -321,7 +320,7 @@ class ParallelizedDeepResearch(DeepResearch):
             end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         )
 
-        logger.debug(f"[DeepResearch] async research completed")
+        logger.debug(f"[Parallelized DeepResearch] async research completed")
         return final_data
 
     async def _async_research(self, task: AsyncQueryTask, task_manager: AsyncTaskManager,
@@ -332,7 +331,7 @@ class ParallelizedDeepResearch(DeepResearch):
                 task.state = TaskState.RUNNING
                 task.start_time = datetime.now()
                 
-                logger.debug(f"[DeepResearch] Processing async task {task.task_id} at depth {task.depth} for query: {task.serp_query['query']}")
+                logger.debug(f"[Parallelized DeepResearch] Processing async task {task.task_id} at depth {task.depth} for query: {task.serp_query['query']}")
                 
                 # Update progress
                 await progress_tracker.update_progress(current_query=task.serp_query['query'])
@@ -363,7 +362,6 @@ class ParallelizedDeepResearch(DeepResearch):
                     query=task.serp_query['query'],
                     report_type=ReportType.ResearchReport.value,
                     report_source=self.config.report_source,
-                    # NOTE: Using the langchain vector store
                     vector_store=load_vector_db("vector_db") if self.config.report_source == ReportSource.LangChainVectorStore.value else None,
                     tone=self.tone,
                     websocket=self.websocket,
@@ -420,7 +418,7 @@ class ParallelizedDeepResearch(DeepResearch):
                 
                 # Generate recursive tasks if needed (NOTE: Controlled by DEPTH)
                 if task.depth < self.config.max_depth:
-                    logger.debug(f"[DeepResearch] Generating recursive tasks for depth {task.depth + 1}")
+                    logger.debug(f"[Parallelized DeepResearch] Generating recursive tasks for depth {task.depth + 1}")
                     
                     try:
                         await self._generate_recursive_tasks(
@@ -428,18 +426,18 @@ class ParallelizedDeepResearch(DeepResearch):
                             progress_tracker, on_progress
                         )
                     except Exception as e:
-                        logger.error(f"[DeepResearch] Error generating recursive tasks: {e}")
+                        logger.error(f"[Parallelized DeepResearch] Error generating recursive tasks: {e}")
                 
-                logger.debug(f"[DeepResearch] Completed async task {task.task_id}")
+                logger.debug(f"[Parallelized DeepResearch] Completed async task {task.task_id}")
 
             except asyncio.CancelledError:
-                logger.info(f"[DeepResearch] Task {task.task_id} was cancelled")
+                logger.info(f"[Parallelized DeepResearch] Task {task.task_id} was cancelled")
                 task.state = TaskState.CANCELLED
                 await task_manager.complete_task(task.task_id, error=asyncio.CancelledError("Task cancelled"))
                 raise
             except Exception as e:
-                logger.error(f"[DeepResearch] Error in async task {task.task_id}: {str(e)}")
-                logger.error(f"[DeepResearch] Exception traceback: {traceback.format_exc()}")
+                logger.error(f"[Parallelized DeepResearch] Error in async task {task.task_id}: {str(e)}")
+                logger.error(f"[Parallelized DeepResearch] Exception traceback: {traceback.format_exc()}")
                 task.state = TaskState.FAILED
                 await task_manager.complete_task(task.task_id, error=e)
 
@@ -469,12 +467,12 @@ class ParallelizedDeepResearch(DeepResearch):
                 start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             )
             
-            logger.debug(f"[DeepResearch] Created recursive planning node: {recursive_planning_node_id} for depth {new_depth}")
+            logger.debug(f"[Parallelized DeepResearch] Created recursive planning node: {recursive_planning_node_id} for depth {new_depth}")
             
             # Generate sub-queries for this recursive level (NOTE: Controlled by BREADTH)
             sub_queries = await self.generate_serp_queries(next_query, num_queries=new_breadth)
             
-            logger.debug(f"[DeepResearch] Generated {len(sub_queries)} recursive queries for depth {new_depth}")
+            logger.debug(f"[Parallelized DeepResearch] Generated {len(sub_queries)} recursive queries for depth {new_depth}")
             
             # Update the planning node with completion
             self.logger.update_node(
@@ -498,17 +496,17 @@ class ParallelizedDeepResearch(DeepResearch):
                 )
                 query_task.asyncio_task = asyncio_task
                 
-                logger.debug(f"[DeepResearch] Launched recursive task {task_id} at depth {new_depth}")
+                logger.debug(f"[Parallelized DeepResearch] Launched recursive task {task_id} at depth {new_depth}")
             
-            logger.debug(f"[DeepResearch] All recursive tasks launched for depth {new_depth}")
+            logger.debug(f"[Parallelized DeepResearch] All recursive tasks launched for depth {new_depth}")
             
         except Exception as e:
-            logger.error(f"[DeepResearch] Error in _generate_recursive_tasks: {str(e)}")
-            logger.error(f"[DeepResearch] Exception traceback: {traceback.format_exc()}")
+            logger.error(f"[Parallelized DeepResearch] Error in _generate_recursive_tasks: {str(e)}")
+            logger.error(f"[Parallelized DeepResearch] Exception traceback: {traceback.format_exc()}")
 
     async def _wait_for_all_tasks_completion(self, task_manager: AsyncTaskManager):
         """Wait for all active tasks to complete with timeout and better logging"""
-        logger.debug("[DeepResearch] Waiting for all tasks to complete...")
+        logger.debug("[Parallelized DeepResearch] Waiting for all tasks to complete...")
 
         max_wait_time = 60 * 10  # 10 minutes timeout
         start_time = time.time()
@@ -520,7 +518,7 @@ class ParallelizedDeepResearch(DeepResearch):
             # Check for timeout
             if current_time - start_time > max_wait_time:
                 stats = await task_manager.get_task_stats()
-                logger.error(f"[DeepResearch] Timeout waiting for tasks. Stats: {stats}")
+                logger.error(f"[Parallelized DeepResearch] Timeout waiting for tasks. Stats: {stats}")
                 # Cancel remaining tasks
                 await task_manager.cancel_all_tasks()
                 break
@@ -528,9 +526,9 @@ class ParallelizedDeepResearch(DeepResearch):
             # Log stats periodically
             if current_time - last_stats_time > 10:  # Every 10 seconds
                 stats = await task_manager.get_task_stats()
-                logger.debug(f"[DeepResearch] Task stats: {stats}")
+                logger.debug(f"[Parallelized DeepResearch] Task stats: {stats}")
                 last_stats_time = current_time
             
             await asyncio.sleep(0.5)  # Wait before checking again
             
-        logger.debug("[DeepResearch] All tasks completed")
+        logger.debug("[Parallelized DeepResearch] All tasks completed")

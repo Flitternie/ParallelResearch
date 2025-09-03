@@ -39,10 +39,10 @@ class DepthPlanningDecision(BaseModel):
 
 class AgenticPlanner:
     """Agent-based task planner that dynamically determines research breadth and depth"""
-    
-    def __init__(self, config: Config, user_query: str = None):
-        self.config = config
+
+    def __init__(self, config: Config, user_query: str):
         self.user_query = user_query
+        self.config = config
         self.research_start_time = datetime.now()
     
     def _get_research_duration(self) -> str:
@@ -51,8 +51,8 @@ class AgenticPlanner:
         minutes = int(elapsed.total_seconds() / 60)
         seconds = int(elapsed.total_seconds() % 60)
         return f"{minutes}m {seconds}s"
-        
-    async def plan_breadth(self, query: str, depth: int, research_context: Dict[str, Any] = None) -> int:
+
+    async def plan_breadth(self, query: str, max_breadth: int, current_depth: int, research_context: Dict[str, Any] = None) -> int:
         """Determine the number of subqueries (breadth) for the current level"""
         
         # Prepare context information
@@ -87,15 +87,10 @@ SUBQUERY REQUIREMENTS:
 - Avoid overlap between queries
 - Keep queries clear and concise 
 
-EXAMPLES:
-- "How does photosynthesis work?" (depth=1) → 2 subqueries (mechanisms, factors)
-- "SpaceX Falcon Heavy launch schedule" (depth=1) → 1 subquery (very specific)
-- Any follow-up at depth=2 → 1 subquery (drill down on specific aspect)
-
-Maximum allowed: {self.config.max_breadth} subqueries. Aim for minimum effective number."""},
+Maximum allowed: {max_breadth} subqueries. Aim for minimum effective number."""},
             {"role": "user", "content": f"""Original user query: {self.user_query}
 Current research query: {query}
-Current depth level: {depth}
+Current depth level: {current_depth}
 {context_info}
 
 Based on the decision matrix above, determine the MINIMUM effective number of subqueries needed.
@@ -107,7 +102,7 @@ Remember: Speed and efficiency are paramount! Avoid redundancy."""}
             messages=messages,
             llm_provider=self.config.llm_provider,
             model=self.config.reasoning_model,
-            temperature=0.1,
+            temperature=0.0,
             max_tokens=200,
             reasoning_effort=ReasoningEfforts.High.value,
             seed=42,
@@ -133,7 +128,7 @@ Remember: Speed and efficiency are paramount! Avoid redundancy."""}
             response.num_subqueries = 3
             response.reasoning += f" (Time-aware: {elapsed_minutes:.1f}m elapsed)"
 
-        logger.info(f"[TaskPlanner] Breadth decision for depth {depth}: {response.num_subqueries} subqueries.")
+        logger.info(f"[TaskPlanner] Breadth decision for depth {current_depth}: {response.num_subqueries} subqueries.")
         logger.debug(f"[TaskPlanner] Breadth reasoning: {response.reasoning}")
         return response
             
@@ -217,7 +212,7 @@ Should we continue to depth {current_depth + 1}?"""}
             messages=messages,
             llm_provider=self.config.llm_provider,
             model=self.config.reasoning_model,
-            temperature=0.1,
+            temperature=0.0,
             max_tokens=300,
             reasoning_effort=ReasoningEfforts.High.value,
             seed=42,
@@ -265,16 +260,17 @@ class FlashResearch(ParallelizedDeepResearch):
         self.task_planner = AgenticPlanner(config=self.config, user_query=query)
 
 
-    async def plan_serp_queries(self, query: str, depth: int, context: str) -> List[Dict[str, str]]:
+    async def plan_serp_queries(self, query: str, max_breadth: int, current_depth: int, context: str) -> List[Dict[str, str]]:
         """Generate SERP queries for research"""
 
         response = await self.task_planner.plan_breadth(
             query=query, 
-            depth=depth, 
+            max_breadth=max_breadth,
+            current_depth=current_depth,
             research_context=context
         )
 
-        logger.debug(f"[FlashResearch] Task planner determined breadth: {response.num_subqueries} for depth {depth}")
+        logger.debug(f"[FlashResearch] Task planner determined breadth: {response.num_subqueries} for depth {current_depth}")
 
         # convert response to structured format
         if isinstance(response, str):
@@ -333,7 +329,7 @@ class FlashResearch(ParallelizedDeepResearch):
         current_research_context = await task_manager.get_all_data()
 
         # Generate initial queries (NOTE: Now controlled by AGENT-BASED TASK PLANNER)
-        serp_queries = await self.plan_serp_queries(query, depth, current_research_context)
+        serp_queries = await self.plan_serp_queries(query, self.config.max_breadth, depth, current_research_context)
         
         logger.debug(f"[FlashResearch] Generated {len(serp_queries)} initial queries")
         
@@ -517,6 +513,7 @@ class FlashResearch(ParallelizedDeepResearch):
         try:
             # NOTE: Now using AGENT-BASED TASK PLANNER determined breadth
             new_depth = current_depth + 1
+            new_breadth = current_breadth // 2
             
             # Create next query from parent result
             next_query = f"""
@@ -527,7 +524,7 @@ class FlashResearch(ParallelizedDeepResearch):
             # Create planning node for this recursive level
             recursive_planning_node_id = self.logger.add_node(
                 depth=new_depth,
-                breadth=current_breadth,
+                breadth=new_breadth,
                 query=next_query,
                 parent_id=parent_result['node_id'],
                 status="started",
@@ -538,7 +535,7 @@ class FlashResearch(ParallelizedDeepResearch):
             logger.debug(f"[FlashResearch] Created recursive planning node: {recursive_planning_node_id} for depth {new_depth}")
             
             # Generate sub-queries for this recursive level (NOTE: Now controlled by AGENT-BASED TASK PLANNER)
-            sub_queries = await self.plan_serp_queries(next_query, new_depth, parent_result)
+            sub_queries = await self.plan_serp_queries(next_query, new_breadth, new_depth, parent_result)
             
             logger.debug(f"[FlashResearch] Generated {len(sub_queries)} recursive queries for depth {new_depth}")
             

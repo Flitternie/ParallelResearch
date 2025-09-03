@@ -120,7 +120,7 @@ class ResearchLogger:
         self.logs_dir = logs_dir
         self.log_file = f"{logs_dir}/progress.json"
         self.log_data = {
-            "nodes": [],
+            "nodes": {},
             "edges": [],
             "start_time": datetime.now().isoformat()
         }
@@ -162,7 +162,7 @@ class ResearchLogger:
             "start_time": start_time
         }
         
-        self.log_data["nodes"].append(node)
+        self.log_data["nodes"][str(node_id)] = node
         
         if parent_id is not None and isinstance(parent_id, str):
             self.log_data["edges"].append({
@@ -179,35 +179,47 @@ class ResearchLogger:
         self._save_log()
         return node_id
     
+    def get_node_status(self, node_id: str) -> Optional[str]:
+        """Get the status of a research node"""
+        node = self.log_data["nodes"].get(str(node_id))
+        if node:
+            return node.get("status")
+        return None
+    
     def update_node(self, 
                     node_id: str, 
                     status: str,
                     results: Optional[Dict[str, Any]] = None,
                     visited_urls: Optional[List[str]] = None,
+                    start_time: Optional[str] = None,
                     end_time: Optional[str] = None
     ):
         """Update an existing research node"""
-        for node in self.log_data["nodes"]:
-            if str(node["id"]) == str(node_id):
-                node["status"] = status
-                if results:
-                    node["results"] = results
-                if visited_urls:
-                    node["visited_urls"] = list(visited_urls)
-                if end_time:
-                    node["end_time"] = end_time
-                    duration_td = datetime.fromisoformat(end_time) - datetime.fromisoformat(node["start_time"])
-                    hours = int(duration_td.total_seconds() // 3600)
-                    minutes = int((duration_td.total_seconds() % 3600) // 60)
-                    seconds = int(duration_td.total_seconds() % 60)
-                    node["duration"] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-                node["update_timestamp"] = datetime.now().isoformat()
-                break
+        node = self.log_data["nodes"].get(str(node_id))
+        old_status = node.get("status") if node else None
         
-        self._save_log()
+        if node:
+            node["status"] = status
+            if results:
+                node["results"] = results
+            if visited_urls:
+                node["visited_urls"] = list(visited_urls)
+            if start_time:
+                node["start_time"] = start_time
+            if end_time:
+                node["end_time"] = end_time
+                duration_td = datetime.fromisoformat(end_time) - datetime.fromisoformat(node["start_time"])
+                hours = int(duration_td.total_seconds() // 3600)
+                minutes = int((duration_td.total_seconds() % 3600) // 60)
+                seconds = int(duration_td.total_seconds() % 60)
+                node["duration"] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            node["update_timestamp"] = datetime.now().isoformat()
+        
+        # Save log and trigger updates
+        self._save_log(status_change=(old_status, status), node_id=node_id)
     
     
-    def _save_log(self):
+    def _save_log(self, status_change=None, node_id=None):
         """Save the current log to file"""
         with self._lock:
             with open(self.log_file, 'w') as f:
@@ -216,7 +228,27 @@ class ResearchLogger:
         # Call update callback if provided
         if self.update_callback:
             try:
-                self.update_callback(self.log_data)
+                # Prepare update data with visualization info
+                update_data = {
+                    'type': 'visualization_update',
+                    'nodes': self.log_data['nodes'],
+                    'edges': self.log_data['edges']
+                }
+                
+                # Add status change notification if applicable
+                if status_change and node_id:
+                    old_status, new_status = status_change
+                    if old_status != new_status and new_status in ['terminated', 'cancelled']:
+                        node = self.log_data["nodes"].get(str(node_id))
+                        update_data['status_notification'] = {
+                            'node_id': node_id,
+                            'old_status': old_status,
+                            'new_status': new_status,
+                            'node_query': node.get('query', '') if node else '',
+                            'node_depth': node.get('depth', 0) if node else 0
+                        }
+                
+                self.update_callback(update_data)
             except Exception as e:
                 print(f"Error in update callback: {e}")
         

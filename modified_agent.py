@@ -1,6 +1,7 @@
-from typing import Any, Optional
+from typing import Any, Optional, List
 import json
 import logging
+import asyncio
 from datetime import datetime
 
 from gpt_researcher.config import Config
@@ -144,7 +145,6 @@ class GPTResearcher:
         self.subtopics = subtopics or []
         self.visited_urls = visited_urls or set()
         self.verbose = verbose
-        self.context = context or []
         self.headers = headers or {}
         self.research_costs = 0.0
         self.retrievers = get_retrievers(self.headers, self.cfg)
@@ -154,8 +154,12 @@ class GPTResearcher:
         self.log_handler = log_handler
         self.prompt_family = get_prompt_family(prompt_family or self.cfg.prompt_family, self.cfg)
 
-        # NOTE: Modified parameters
-        self.context_size = 10
+        # Real-time context tracking
+        self._context_lock = asyncio.Lock()
+        self._current_context = []
+        self.context = context or []
+        self._context_size = 10
+        self._last_update = None
 
         # Initialize components
         self.research_conductor = ResearchConductor(self, enhanced_logger=self.log_handler)
@@ -264,6 +268,7 @@ class GPTResearcher:
                             current_results = details
                             self.log_handler.update_node(
                                 node_id=self.current_node_id,
+                                status="completed",
                                 results=current_results
                             )
 
@@ -468,7 +473,51 @@ class GPTResearcher:
             raise ValueError("Cost must be an integer or float")
         self.research_costs += cost
         if self.log_handler:
-            self._log_event("research", step="cost_update", details={
+            # Schedule the async log event without waiting
+            asyncio.create_task(self._log_event("research", step="cost_update", details={
                 "cost": cost,
                 "total_cost": self.research_costs
-            })
+            }))
+            
+    async def get_current_context(self) -> str:
+        """Get current research context"""
+        async with self._context_lock:
+            return "\n".join(self._current_context) if self._current_context else ""
+            
+    async def get_current_learnings(self) -> List[str]:
+        """Get current research learnings"""
+        async with self._context_lock:
+            return self._extract_learnings_from_context(self._current_context)
+            
+    async def _update_context(self, new_content: str):
+        """Update research context with new content"""
+        async with self._context_lock:
+            if new_content:
+                self._current_context.append(new_content)
+                self._last_update = datetime.now()
+                # Keep only recent context
+                if len(self._current_context) > self._context_size:
+                    self._current_context = self._current_context[-self._context_size:]
+                    
+    def _extract_learnings_from_context(self, context_list: List[str]) -> List[str]:
+        """Extract learnings from context"""
+        learnings = []
+        try:
+            # Process each context chunk
+            for context in context_list:
+                if not context:
+                    continue
+                    
+                # Split into sentences and filter for substantial content
+                sentences = context.replace('\n', ' ').split('. ')
+                chunk_learnings = [
+                    sentence.strip() + '.' for sentence in sentences 
+                    if len(sentence.strip()) > 30 and not sentence.strip().startswith('http')
+                ]
+                learnings.extend(chunk_learnings[:5])  # Take top 5 from each chunk
+                
+            return learnings[:15]  # Return top 15 overall learnings
+            
+        except Exception as e:
+            logging.getLogger('research').warning(f"Error extracting learnings: {e}")
+            return []

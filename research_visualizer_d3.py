@@ -44,6 +44,8 @@ class VisualizationConfigD3:
         "completed": "#90EE90",
         "error": "#F08080",
         "default": "#D3D3D3",
+        "terminated": "#FF8706",  # Orange for terminated research
+        "cancelled": "#FFBF00",  # Yellow for cancelled research
     })
     
     # Operation colors
@@ -568,7 +570,7 @@ class ResearchVisualizer(BaseResearchVisualizer):
                 .style("fill", function() {{
                     if (d.data.id === "virtual_root") return "#f0f0f0";
                     let color = operationColors[d.data.operation] || operationColors.default;
-                    if (color === operationColors.default) {{
+                    if (color === operationColors.default || d.data.status === "terminated" || d.data.status === "cancelled") {{
                         color = statusColors[d.data.status] || statusColors.default;
                     }}
                     return color;
@@ -1040,7 +1042,7 @@ class ResearchVisualizer(BaseResearchVisualizer):
                 .attr("cy", d => d.y)
                 .style("fill", d => {{
                     let color = operationColors[d.operation] || operationColors.default;
-                    if (color === operationColors.default) {{
+                    if (color === operationColors.default || d.status === "terminated" || d.status === "cancelled") {{
                         color = statusColors[d.status] || statusColors.default;
                     }}
                     return color;
@@ -1246,12 +1248,12 @@ class ResearchVisualizer(BaseResearchVisualizer):
         
         # Create nodes list - exclude internal nodes from main tree
         nodes = []
-        id_to_node = {str(node["id"]): node for node in log_data["nodes"]}
+        id_to_node = {str(node["id"]): node for node in log_data["nodes"].values()}
 
         # Build parent -> [internal nodes] mapping and collect internal edges
         parent_to_internal = {}
         internal_edges = {}  # Store edges between internal nodes by parent
-        for node in log_data["nodes"]:
+        for node in log_data["nodes"].values():
             node_id_str = str(node["id"])
             # Internal node: has a dot and its parent is the part before the first dot
             if '.' in node_id_str:
@@ -1275,7 +1277,7 @@ class ResearchVisualizer(BaseResearchVisualizer):
                     })
 
         # Only add main nodes (non-internal) to the tree structure
-        for node in log_data["nodes"]:
+        for node in log_data["nodes"].values():
             node_id_str = str(node["id"])
             # Skip internal nodes - they will be shown only when parent is expanded
             if '.' in node_id_str:
@@ -1290,6 +1292,14 @@ class ResearchVisualizer(BaseResearchVisualizer):
                 node.get("operation", "default"),
                 self.config.operation_colors["default"]
             )
+
+            if node["status"] in ["terminated", "cancelled"]:
+                # If operation color is not found, use status-based coloring
+                background_color = self.config.status_colors.get(
+                    node["status"], 
+                    self.config.status_colors["default"]
+                )
+
             # If no operation color found, fall back to status-based coloring
             if background_color == self.config.operation_colors["default"]:
                 background_color = self.config.status_colors.get(

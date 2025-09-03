@@ -1,11 +1,14 @@
 .vscode
+.env
 __pycache__
 
+/exp
 /misc
 /logs
 /data
 /database
 /evaluation
+/webpage
 
 /vector_db
 /deepresearch_benchmarking
@@ -13,3 +16,5 @@ __pycache__
 *.ipynb
 *.html
 *.key
+*.json
+

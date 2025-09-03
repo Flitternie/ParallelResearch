@@ -38,6 +38,8 @@ class BaseResearchVisualizer(ABC):
     
     def _clean_text(self, text: str) -> str:
         """Clean text by removing problematic characters and normalizing quotes"""
+        if text is None:
+            return ""
         text = re.sub(r'[^\x20-\x7E\n\'"]', '', text)
         text = text.replace('"', '"').replace('"', '"')
         text = text.replace(''', "'").replace(''', "'")

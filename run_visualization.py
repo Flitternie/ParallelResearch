@@ -1,5 +1,8 @@
 import logging
-from modified_parallel_deep_research import DeepResearch
+# from modified_deep_research import DeepResearch
+# from modified_parallel_deep_research import ParallelizedDeepResearch as DeepResearch
+from recursive_deep_research import RecursiveDeepResearch as DeepResearch
+# from flash_research_runtime import FlashResearchRuntime as DeepResearch
 from research_visualizer_d3 import ResearchVisualizer
 import os
 import time
@@ -16,11 +19,12 @@ os.environ["OPENAI_API_KEY"] = open("./openai.key").read().strip()
 os.environ["OPENAI_BASE_URL"] = open("openai_url.key").read().strip()
 os.environ["BRAVE_API_KEY"] = open("./brave.key").read().strip()
 os.environ["CUSTOM_EMBED_API_KEY"] = open("./openai.key").read().strip()
-os.environ["CUSTOM_EMBED_BASE_URL"] = open("openai_url.key").read().strip()
+# os.environ["CUSTOM_EMBED_BASE_URL"] = open("openai_url.key").read().strip()
+os.environ["CUSTOM_EMBED_BASE_URL"] = "http://0.0.0.0:8000/v1/"
 
 # user_query = "What are the latest news in Fed's monetary policy?"
 user_query = "What are the latest advancements in AI code generation?"
-deep_researcher = DeepResearch(query=user_query, config_path="./config.json", logs_dir=logs_dir)
+deep_researcher = DeepResearch(query=user_query, config_path="./config_exp.json", logs_dir=logs_dir)
 
 
 async def main():

@@ -12,6 +12,9 @@ class DeepResearchApp {
         this.loadingInterval = null;
         this.lastStatusMessageElement = null; // Track the last status message for updates
         this.lastReportContent = null; // Store the last report content for downloading
+        this.visualizationUpdateTimeout = null; // Debounce visualization updates
+        this.previousNodes = new Map(); // Track previous node states for termination detection
+        this.notificationStack = []; // Track active notifications for stacking
         
         this.initializeElements();
         this.setupEventListeners();
@@ -125,7 +128,20 @@ class DeepResearchApp {
 
         this.socket.on('visualization_update', (data) => {
             console.log('Visualization update received:', data);
-            this.updateVisualization(data.nodes, data.edges);
+            // Validate data structure before passing to updateVisualization
+            const nodes = data && data.nodes ? data.nodes : [];
+            const edges = data && data.edges ? data.edges : [];
+            
+            // Check for terminated nodes and show notifications
+            this.checkForTerminatedNodes(nodes);
+            
+            this.updateVisualization(nodes, edges);
+        });
+
+        this.socket.on('status_notification', (data) => {
+            console.log('Status notification received:', data);
+            // Add notification to chat
+            this.addStatusMessage(data.type || 'info', data.message);
         });
 
         this.socket.on('research_complete', (data) => {
@@ -568,37 +584,158 @@ class DeepResearchApp {
             return;
         }
 
-        if (!nodes || nodes.length === 0) {
+        // Validate nodes parameter
+        if (!Array.isArray(nodes)) {
+            console.error('updateVisualization received non-array nodes:', nodes);
+            this.addStatusMessage('error', 'Invalid visualization data: nodes must be an array');
+            return;
+        }
+
+        if (nodes.length === 0) {
             console.log('No nodes to display');
             this.clearVisualization();
             return;
         }
 
+        // Validate edges parameter
+        if (!Array.isArray(edges)) {
+            console.warn('updateVisualization received non-array edges, defaulting to empty array:', edges);
+            edges = [];
+        }
+
         // Hide all placeholder states when showing actual visualization
         this.hideAllPlaceholderStates();
 
-        try {
-            // Create log data structure expected by the visualizer
-            const logData = {
-                nodes: nodes,
-                edges: edges.map(edge => ({
-                    from: edge.source || edge.from,
-                    to: edge.target || edge.to
-                }))
-            };
+        // Debounce visualization updates to prevent frequent shaking
+        if (this.visualizationUpdateTimeout) {
+            clearTimeout(this.visualizationUpdateTimeout);
+        }
+        
+        this.visualizationUpdateTimeout = setTimeout(async () => {
+            try {
+                // Create log data structure expected by the visualizer
+                const logData = {
+                    nodes: nodes,
+                    edges: edges.map(edge => ({
+                        from: edge.source || edge.from,
+                        to: edge.target || edge.to
+                    }))
+                };
 
-            // Render visualization to the container
-            await this.visualizer.renderToContainer('#vizContent', logData);
+                // Render visualization to the container
+                await this.visualizer.renderToContainer('#vizContent', logData);
+                
+                // Analyze progress and create descriptive status message
+                const progressInfo = this.analyzeNodesProgress(nodes);
+                console.log('Progress analysis:', progressInfo);
+                
+                // Update or add status message about visualization update
+                this.addStatusMessage('info', progressInfo.message, true);
+            } catch (error) {
+                console.error('Error updating visualization:', error);
+                this.addStatusMessage('error', 'Failed to update visualization');
+            }
+        }, 100); // 100ms debounce delay
+    }
+
+    checkForTerminatedNodes(nodes) {
+        if (!Array.isArray(nodes)) return;
+        
+        // Check for newly terminated nodes
+        nodes.forEach(node => {
+            const nodeId = node.id;
+            const currentStatus = node.status;
+            const previousNode = this.previousNodes.get(nodeId);
             
-            // Analyze progress and create descriptive status message
-            const progressInfo = this.analyzeNodesProgress(nodes);
-            console.log('Progress analysis:', progressInfo);
+            // If node was not terminated before but is now terminated
+            if (previousNode && previousNode.status !== 'terminated' && currentStatus === 'terminated') {
+                this.showTerminationNotification(nodeId);
+            }
             
-            // Update or add status message about visualization update
-            this.addStatusMessage('info', progressInfo.message, true);
-        } catch (error) {
-            console.error('Error updating visualization:', error);
-            this.addStatusMessage('error', 'Failed to update visualization');
+            // Update previous node state
+            this.previousNodes.set(nodeId, { status: currentStatus });
+        });
+    }
+
+    showTerminationNotification(nodeId) {
+        const notification = document.createElement('div');
+        notification.className = 'termination-notification';
+        notification.innerHTML = `
+            <div class="notification-content">
+                <strong>Node ${nodeId} Terminated</strong>
+                <p>Terminated by the Real-time Orchestrator after achieving its research goal.</p>
+            </div>
+            <button class="notification-close">&times;</button>
+        `;
+        
+        // Add to body
+        document.body.appendChild(notification);
+        
+        // Add to notification stack
+        this.notificationStack.push(notification);
+        
+        // Position notification based on stack
+        this.updateNotificationPositions();
+        
+        // Animate in
+        setTimeout(() => {
+            notification.classList.add('show');
+        }, 10);
+        
+        // Auto remove after 5 seconds
+        const autoRemoveTimeout = setTimeout(() => {
+            this.removeNotification(notification);
+        }, 5000);
+        
+        // Store timeout reference for cleanup
+        notification._autoRemoveTimeout = autoRemoveTimeout;
+        
+        // Manual close handler
+        const closeBtn = notification.querySelector('.notification-close');
+        closeBtn.addEventListener('click', () => {
+            clearTimeout(autoRemoveTimeout);
+            this.removeNotification(notification);
+        });
+    }
+
+    updateNotificationPositions() {
+        const topMargin = 20;
+        const notificationHeight = 80; // Approximate height including margins
+        
+        this.notificationStack.forEach((notification, index) => {
+            if (notification.parentNode) {
+                const topPosition = topMargin + (index * notificationHeight);
+                notification.style.top = `${topPosition}px`;
+            }
+        });
+    }
+
+    removeNotification(notification) {
+        if (notification && notification.parentNode) {
+            // Clear auto-remove timeout if it exists
+            if (notification._autoRemoveTimeout) {
+                clearTimeout(notification._autoRemoveTimeout);
+            }
+            
+            // Remove from stack
+            const index = this.notificationStack.indexOf(notification);
+            if (index > -1) {
+                this.notificationStack.splice(index, 1);
+            }
+            
+            // Animate out
+            notification.classList.remove('show');
+            notification.classList.add('hide');
+            
+            // Update positions of remaining notifications
+            this.updateNotificationPositions();
+            
+            // Remove from DOM after animation
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.parentNode.removeChild(notification);
+                }
+            }, 300);
         }
     }
 
@@ -689,7 +826,9 @@ class DeepResearchApp {
             'started': '#1976d2',
             'running': '#ff9800',
             'completed': '#2e7d32',
-            'error': '#c62828'
+            'error': '#c62828',
+            'terminated': '#FF8706',
+            'cancelled': '#FFBF00'
         };
         return colors[status] || '#666';
     }

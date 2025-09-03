@@ -33,9 +33,11 @@ class VisualizationConfigD3 {
         // Colors
         this.status_colors = options.status_colors || {
             "started": "#ADD8E6",
-            "completed": "#90EE90", 
+            "completed": "#90EE90",
             "error": "#F08080",
-            "default": "#D3D3D3"
+            "default": "#D3D3D3",
+            "terminated": "#FF8706", 
+            "cancelled": "#FFBF00", 
         };
         
         // Operation colors
@@ -576,6 +578,8 @@ class ResearchVisualizer extends BaseResearchVisualizer {
         this.config = config || new VisualizationConfigD3();
         this.templates = HTMLTemplatesD3;
         this.logData = null;
+        this.lastLogData = null; // Track previous data to avoid unnecessary re-renders
+        this.lastResult = null; // Cache last result
     }
 
     // Set log data directly (for web context)
@@ -1012,7 +1016,7 @@ class ResearchVisualizer extends BaseResearchVisualizer {
                 .style("fill", function() {
                     if (d.data.id === "virtual_root") return "#f0f0f0";
                     let color = operationColors[d.data.operation] || operationColors.default;
-                    if (color === operationColors.default) {
+                    if (color === operationColors.default || d.data.status == "terminated" || d.data.status == "cancelled") {
                         color = statusColors[d.data.status] || statusColors.default;
                     }
                     return color;
@@ -1119,10 +1123,10 @@ class ResearchVisualizer extends BaseResearchVisualizer {
                 // Update node shape and size
                 updateNodeShape(d);
                 
-                // Recalculate layout to prevent overlapping
+                // Recalculate layout to prevent overlapping with increased delay for smoother transitions
                 setTimeout(function() {
                     recalculateLayout();
-                }, config.transitionDuration / 2);
+                }, config.transitionDuration);
             }
             
             showNodeInfo(d.data);
@@ -1503,7 +1507,7 @@ class ResearchVisualizer extends BaseResearchVisualizer {
                 .attr("cy", d => d.y)
                 .style("fill", d => {
                     let color = operationColors[d.operation] || operationColors.default;
-                    if (color === operationColors.default) {
+                    if (color === operationColors.default || d.status === "terminated" || d.status === "cancelled") {{
                         color = statusColors[d.status] || statusColors.default;
                     }
                     return color;
@@ -1716,6 +1720,20 @@ class ResearchVisualizer extends BaseResearchVisualizer {
         // Create an interactive D3.js visualization of the research progress
         const logData = await this.loadLog();
 
+        // Validate data structure
+        if (!logData) {
+            throw new Error("No log data available");
+        }
+        if (!Array.isArray(logData.nodes)) {
+            console.error("logData.nodes is not an array:", logData.nodes);
+            throw new Error("logData.nodes must be an array");
+        }
+        if (!Array.isArray(logData.edges)) {
+            console.error("logData.edges is not an array:", logData.edges);
+            // Default to empty array if edges is not provided
+            logData.edges = [];
+        }
+
         // Create nodes list - exclude internal nodes from main tree
         const nodes = [];
         const idToNode = {};
@@ -1775,7 +1793,7 @@ class ResearchVisualizer extends BaseResearchVisualizer {
             // First check for operation-based color
             let backgroundColor = this.config.operation_colors[node.operation] || this.config.operation_colors.default;
             // If no operation color found, fall back to status-based coloring
-            if (backgroundColor === this.config.operation_colors.default) {
+            if (backgroundColor === this.config.operation_colors.default || node.status === "terminated" || node.status === "cancelled") {
                 backgroundColor = this.config.status_colors[node.status] || this.config.status_colors.default;
             }
 
@@ -1823,10 +1841,20 @@ class ResearchVisualizer extends BaseResearchVisualizer {
         };
     }
 
-    // Method to integrate with existing web app
+    // Method to integrate with existing web app - with state comparison
     async renderToContainer(containerSelector, logData) {
         this.setLogData(logData);
+        
+        // Compare with previous state to avoid unnecessary re-renders
+        if (this.lastLogData && this.isDataEquivalent(this.lastLogData, logData)) {
+            console.log('Data unchanged, skipping re-render to prevent shaking');
+            return this.lastResult;
+        }
+        
+        this.lastLogData = JSON.parse(JSON.stringify(logData)); // Deep copy for comparison
+        
         const result = await this.visualize();
+        this.lastResult = result;
         
         // Clear existing content
         const container = document.querySelector(containerSelector);
@@ -1858,6 +1886,48 @@ class ResearchVisualizer extends BaseResearchVisualizer {
         }
         
         return result;
+    }
+
+    // Compare two log data objects to determine if they're equivalent
+    isDataEquivalent(oldData, newData) {
+        if (!oldData || !newData) return false;
+        
+        // Compare node counts first (quick check)
+        if (oldData.nodes?.length !== newData.nodes?.length) return false;
+        if (oldData.edges?.length !== newData.edges?.length) return false;
+        
+        // Compare node IDs and statuses (key changes that matter for visualization)
+        const oldNodeMap = new Map();
+        const newNodeMap = new Map();
+        
+        if (oldData.nodes) {
+            for (const node of oldData.nodes) {
+                oldNodeMap.set(node.id, { status: node.status, hasInternal: !!node.internal_nodes?.length });
+            }
+        }
+        
+        if (newData.nodes) {
+            for (const node of newData.nodes) {
+                newNodeMap.set(node.id, { status: node.status, hasInternal: !!node.internal_nodes?.length });
+            }
+        }
+        
+        // Check if any node status or structure has changed
+        for (const [id, oldNode] of oldNodeMap) {
+            const newNode = newNodeMap.get(id);
+            if (!newNode || oldNode.status !== newNode.status || oldNode.hasInternal !== newNode.hasInternal) {
+                return false;
+            }
+        }
+        
+        // Check for new nodes
+        for (const id of newNodeMap.keys()) {
+            if (!oldNodeMap.has(id)) {
+                return false;
+            }
+        }
+        
+        return true; // Data is equivalent
     }
 
     _renderD3Visualization(container, nodes, edges, config) {
@@ -2042,7 +2112,7 @@ class ResearchVisualizer extends BaseResearchVisualizer {
         
         svg.call(zoom.transform, initialTransform);
 
-        // Create force simulation for dynamic spacing
+        // Create force simulation for dynamic spacing - with stabilization
         const simulation = d3.forceSimulation(root.descendants())
             .force("link", d3.forceLink(root.links())
                 .id(d => d.data.id)
@@ -2050,37 +2120,65 @@ class ResearchVisualizer extends BaseResearchVisualizer {
                     // Increase distance for expanded nodes
                     const sourceExpanded = expandedNodes.has(d.source.data.id);
                     const targetExpanded = expandedNodes.has(d.target.data.id);
-                    const baseDistance = config.nodeSizeY * 1.5; // Increased base distance
-                    return baseDistance * (sourceExpanded || targetExpanded ? 3 : 1.5); // Increased multiplier
+                    const baseDistance = config.nodeSizeY * 1.2; // Reduced from 1.5
+                    return baseDistance * (sourceExpanded || targetExpanded ? 2 : 1.2); // Reduced multiplier
                 })
-                .strength(0.7)) // Increased strength to maintain structure
+                .strength(0.3)) // Reduced strength for gentler movement
             .force("charge", d3.forceManyBody()
                 .strength(d => {
-                    // Much stronger repulsion for expanded nodes
-                    return expandedNodes.has(d.data.id) ? -2000 : -1000;
+                    // Gentler repulsion to reduce oscillation
+                    return expandedNodes.has(d.data.id) ? -800 : -400; // Reduced values
                 }))
             .force("collide", d3.forceCollide()
                 .radius(d => {
                     // Larger collision radius for expanded nodes
                     if (expandedNodes.has(d.data.id)) {
                         const internalNodeCount = d.data.internal_nodes ? d.data.internal_nodes.length : 0;
-                        // Increased base radius and multiplier
-                        return Math.max(80, internalNodeCount * 15);
+                        return Math.max(60, internalNodeCount * 10); // Reduced values
                     }
-                    return config.nodeRadius * 2; // Increased base collision radius
+                    return config.nodeRadius * 1.8; // Reduced from 2
                 })
-                .strength(1)) // Maximum collision strength
+                .strength(0.8)) // Reduced collision strength
             .force("x", d3.forceX(d => {
                 // Keep nodes near their tree layout x position
                 return d.x;
-            }).strength(0.5)) // Increased x-positioning force
+            }).strength(0.3)) // Reduced positioning force
             .force("y", d3.forceY(d => {
                 // Keep nodes near their tree layout y position
                 return d.y;
-            }).strength(0.5)) // Increased y-positioning force
+            }).strength(0.3)) // Reduced positioning force
+            .alphaDecay(0.05) // Slower decay for more stable convergence
+            .velocityDecay(0.7) // Higher velocity decay to reduce oscillation
             .on("tick", ticked);
 
+        // Track if simulation has stabilized
+        let isStabilized = false;
+        let lastUpdateTime = 0;
+        const stabilizationThreshold = 0.01; // Minimum alpha for stabilization
+
         function ticked() {
+            const now = performance.now();
+            
+            // Only update visuals if enough time has passed or if not stabilized
+            if (now - lastUpdateTime < 16 || (isStabilized && simulation.alpha() < stabilizationThreshold)) {
+                return; // Skip update to reduce frequent redraws
+            }
+            
+            lastUpdateTime = now;
+            
+            // Check if simulation has stabilized
+            if (simulation.alpha() < stabilizationThreshold && !isStabilized) {
+                isStabilized = true;
+                console.log('Simulation stabilized');
+                // Fix node positions when stabilized to prevent further movement
+                root.descendants().forEach(d => {
+                    if (Math.abs(d.vx) < 0.1 && Math.abs(d.vy) < 0.1) {
+                        d.fx = d.x;
+                        d.fy = d.y;
+                    }
+                });
+            }
+
             // Update link positions
             link.attr("d", d3.linkVertical()
                 .x(d => d.x)
@@ -2108,35 +2206,44 @@ class ResearchVisualizer extends BaseResearchVisualizer {
             });
         }
 
-        // Reheat simulation when nodes are expanded/collapsed
+        // Gentle simulation restart when nodes are expanded/collapsed
         function reheatSimulation() {
-            simulation.alpha(0.3).restart();
+            // Unfix nodes that were previously stabilized
+            root.descendants().forEach(d => {
+                if (d.fx !== null || d.fy !== null) {
+                    d.fx = null;
+                    d.fy = null;
+                }
+            });
+            
+            isStabilized = false;
+            simulation.alpha(0.1).restart(); // Gentler restart
         }
 
         // Recalculate tree layout to prevent overlapping
         function recalculateLayout() {
-            // Update node sizes and forces with stronger values
+            // Update node sizes and forces with gentler values
             simulation.force("collide").radius(d => {
                 if (expandedNodes.has(d.data.id)) {
                     const internalNodeCount = d.data.internal_nodes ? d.data.internal_nodes.length : 0;
-                    return Math.max(80, internalNodeCount * 15);
+                    return Math.max(60, internalNodeCount * 10); // Reduced values
                 }
-                return config.nodeRadius * 2;
-            }).strength(1);
+                return config.nodeRadius * 1.8;
+            }).strength(0.8);
 
             simulation.force("link").distance(d => {
                 const sourceExpanded = expandedNodes.has(d.source.data.id);
                 const targetExpanded = expandedNodes.has(d.target.data.id);
-                const baseDistance = config.nodeSizeY * 1.5;
-                return baseDistance * (sourceExpanded || targetExpanded ? 3 : 1.5);
-            }).strength(0.7);
+                const baseDistance = config.nodeSizeY * 1.2;
+                return baseDistance * (sourceExpanded || targetExpanded ? 2 : 1.2);
+            }).strength(0.3);
 
             simulation.force("charge").strength(d => {
-                return expandedNodes.has(d.data.id) ? -2000 : -1000;
+                return expandedNodes.has(d.data.id) ? -800 : -400; // Reduced values
             });
 
-            // Reheat simulation with higher energy
-            simulation.alpha(0.5).restart();
+            // Gentle reheat with lower energy
+            reheatSimulation();
         }
 
         // Drag functions
@@ -2208,7 +2315,7 @@ class ResearchVisualizer extends BaseResearchVisualizer {
                 .style("fill", function() {
                     if (d.data.id === "virtual_root") return "#f0f0f0";
                     let color = operationColors[d.data.operation] || operationColors.default;
-                    if (color === operationColors.default) {
+                    if (color === operationColors.default || d.data.status == "terminated" || d.data.status == "cancelled") {
                         color = statusColors[d.data.status] || statusColors.default;
                     }
                     return color;
@@ -2298,10 +2405,10 @@ class ResearchVisualizer extends BaseResearchVisualizer {
                 // Update expansion indicator
                 updateNodeShape(d);
                 
-                // Recalculate layout to prevent overlapping
+                // Recalculate layout to prevent overlapping with increased delay for smoother transitions
                 setTimeout(function() {
                     recalculateLayout();
-                }, config.transitionDuration / 2);
+                }, config.transitionDuration);
             }
             
             showNodeInfo(d.data);
@@ -2606,7 +2713,7 @@ class ResearchVisualizer extends BaseResearchVisualizer {
                 .attr("cy", d => d.y)
                 .style("fill", d => {
                     let color = operationColors[d.operation] || operationColors.default;
-                    if (color === operationColors.default) {
+                    if (color === operationColors.default || d.status === "terminated" || d.status === "cancelled") {
                         color = statusColors[d.status] || statusColors.default;
                     }
                     return color;
