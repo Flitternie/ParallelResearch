@@ -67,10 +67,12 @@ class ResearchConductor:
                     self.researcher.visited_urls.add(result.get("href"))
         else:
             search_results = await get_search_results(query, self.researcher.retrievers[0], query_domains)
-        if search_results is None:
+        try:
+            self.logger.info(f"Initial search results obtained: {len(search_results)} results")
+            self.logger.debug(f"[ResearchConductor] Got {len(search_results)} initial search results")
+        except Exception as e:
+            self.logger.error(f"[ResearchConductor] Error obtaining search results for query {query}: {e}")
             search_results = []
-        self.logger.info(f"Initial search results obtained: {len(search_results)} results")
-        self.logger.debug(f"[ResearchConductor] Got {len(search_results)} initial search results")
 
         await stream_output(
             "logs",

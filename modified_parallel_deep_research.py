@@ -7,7 +7,7 @@ from datetime import datetime
 import traceback
 from enum import Enum
 
-from modified_deep_research import DeepResearch
+from modified_deep_research import TaskState, DeepResearch
 from modified_agent import GPTResearcher
 from gpt_researcher.utils.enum import ReportType, ReportSource, Tone
 
@@ -16,14 +16,6 @@ from utils import ResearchProgress, trim_context_to_word_limit
 
 logger = logging.getLogger(__name__)
 
-
-class TaskState(Enum):
-    """Task lifecycle states"""
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    CANCELLED = "cancelled"
-    FAILED = "failed"
 
 class AsyncProgress:
     """Async-safe progress tracking"""
@@ -269,7 +261,7 @@ class ParallelizedDeepResearch(DeepResearch):
             breadth=breadth,
             query=query,
             parent_id=parent_node_id,
-            status="started",
+            status=TaskState.STARTED.value,
             operation="plan",
             start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         )
@@ -304,14 +296,14 @@ class ParallelizedDeepResearch(DeepResearch):
         final_data = await task_manager.get_all_data()
         
         # Trim context to stay within word limits
-        trimmed_context = trim_context_to_word_limit(final_data['context'])
+        trimmed_context = trim_context_to_word_limit(final_data['context'], max_words=self.max_context_words)
         logger.info(f"[Parallelized DeepResearch] Trimmed context from {len(final_data['context'])} items to {len(trimmed_context)} items")
         final_data['context'] = trimmed_context
 
         # Log completion
         self.logger.update_node(
             node_id=current_node_id,
-            status="completed",
+            status=TaskState.COMPLETED.value,
             results={
                 'learnings': final_data['learnings'],
                 'citations': final_data['citations']
@@ -327,6 +319,8 @@ class ParallelizedDeepResearch(DeepResearch):
                                progress_tracker: AsyncProgress, on_progress=None) -> None:
         """Process a single query task asynchronously with semaphore-controlled concurrency"""
         async with self.semaphore:  # Control concurrency
+            researcher = None
+            query_node_id = None
             try:
                 task.state = TaskState.RUNNING
                 task.start_time = datetime.now()
@@ -352,7 +346,7 @@ class ParallelizedDeepResearch(DeepResearch):
                     query=task.serp_query['query'],
                     parent_id=task.parent_node_id,
                     research_goal=task.serp_query['researchGoal'],
-                    status="started",
+                    status=TaskState.STARTED.value,
                     operation="research",
                     start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 )
@@ -372,8 +366,17 @@ class ParallelizedDeepResearch(DeepResearch):
                     parent_node_id=query_node_id
                 )
 
-                # Conduct research - this is already async
-                await researcher.conduct_research()
+                # Conduct research with timeout (consistent with other implementations)
+                try:
+                    # Use configured timeout or default to 300 seconds
+                    research_timeout = getattr(self.config, "individual_research_timeout", 300)
+                    await asyncio.wait_for(
+                        researcher.conduct_research(),
+                        timeout=research_timeout
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(f"[Parallelized DeepResearch] Research timed out after {research_timeout}s for query: {task.serp_query['query'][:100]}...")
+                    raise asyncio.TimeoutError(f"Research timed out for query: {task.serp_query['query'][:100]}...")
                 
                 # Process results
                 context = researcher.context
@@ -392,7 +395,7 @@ class ParallelizedDeepResearch(DeepResearch):
                 # Log completion
                 self.logger.update_node(
                     node_id=query_node_id,
-                    status="completed",
+                    status=TaskState.COMPLETED.value,
                     results={
                         'learnings': results['learnings'],
                         'citations': results['citations']
@@ -432,12 +435,43 @@ class ParallelizedDeepResearch(DeepResearch):
 
             except asyncio.CancelledError:
                 logger.info(f"[Parallelized DeepResearch] Task {task.task_id} was cancelled")
+                # Best-effort salvage of intermediate data and mark node as cancelled
+                try:
+                    salvage = await self._salvage_researcher_data(
+                        researcher,
+                        query_node_id=query_node_id,
+                        mark_status=TaskState.CANCELLED.value
+                    )
+                    # Feed salvaged data into task manager for aggregation
+                    if salvage.get("visited"):
+                        await task_manager.add_visited_urls(set(salvage["visited"]))
+                    for ctx in salvage.get("context", []) or []:
+                        await task_manager.add_context(ctx)
+                    if salvage.get("sources"):
+                        await task_manager.add_sources(salvage["sources"]) 
+                except Exception as salvage_err:
+                    logger.debug(f"[Parallelized DeepResearch] Salvage on cancellation failed: {salvage_err}")
                 task.state = TaskState.CANCELLED
                 await task_manager.complete_task(task.task_id, error=asyncio.CancelledError("Task cancelled"))
                 raise
             except Exception as e:
                 logger.error(f"[Parallelized DeepResearch] Error in async task {task.task_id}: {str(e)}")
                 logger.error(f"[Parallelized DeepResearch] Exception traceback: {traceback.format_exc()}")
+                # Best-effort salvage and mark node as failed
+                try:
+                    salvage = await self._salvage_researcher_data(
+                        researcher,
+                        query_node_id=query_node_id,
+                        mark_status=TaskState.FAILED.value
+                    )
+                    if salvage.get("visited"):
+                        await task_manager.add_visited_urls(set(salvage["visited"]))
+                    for ctx in salvage.get("context", []) or []:
+                        await task_manager.add_context(ctx)
+                    if salvage.get("sources"):
+                        await task_manager.add_sources(salvage["sources"]) 
+                except Exception as salvage_err:
+                    logger.debug(f"[Parallelized DeepResearch] Salvage on cancellation failed: {salvage_err}")
                 task.state = TaskState.FAILED
                 await task_manager.complete_task(task.task_id, error=e)
 
@@ -462,7 +496,7 @@ class ParallelizedDeepResearch(DeepResearch):
                 breadth=new_breadth,
                 query=next_query,
                 parent_id=parent_result['node_id'],
-                status="started",
+                status=TaskState.STARTED.value,
                 operation="plan",
                 start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             )
@@ -477,7 +511,7 @@ class ParallelizedDeepResearch(DeepResearch):
             # Update the planning node with completion
             self.logger.update_node(
                 node_id=recursive_planning_node_id,
-                status="completed",
+                status=TaskState.COMPLETED.value,
                 results={"generated_queries": len(sub_queries)},
                 end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             )
@@ -507,8 +541,8 @@ class ParallelizedDeepResearch(DeepResearch):
     async def _wait_for_all_tasks_completion(self, task_manager: AsyncTaskManager):
         """Wait for all active tasks to complete with timeout and better logging"""
         logger.debug("[Parallelized DeepResearch] Waiting for all tasks to complete...")
-
-        max_wait_time = 60 * 10  # 10 minutes timeout
+        # Use configured global timeout or default to 3600 seconds (consistent with other implementations)
+        max_wait_time = getattr(self.config, "time_limit_seconds", 3600)
         start_time = time.time()
         last_stats_time = start_time
         

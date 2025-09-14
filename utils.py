@@ -4,9 +4,6 @@ from datetime import datetime
 import threading
 from research_visualizer_legacy import ResearchVisualizer
 
-# Maximum words allowed in context (25k words for safety margin)
-MAX_CONTEXT_WORDS = 25000
-
 
 def count_words(text: str) -> int:
     """Count words in a text string"""
@@ -17,7 +14,7 @@ def count_words(text: str) -> int:
     else:
         raise TypeError(f"Unsupported type for word counting: {type(text)}")
 
-def trim_context_to_word_limit(context_list: List[str], max_words: int = MAX_CONTEXT_WORDS) -> List[str]:
+def trim_context_to_word_limit(context_list: List[str], max_words: int) -> List[str]:
     """Trim context list to stay within word limit while preserving most recent/relevant items"""
     total_words = 0
     trimmed_context = []

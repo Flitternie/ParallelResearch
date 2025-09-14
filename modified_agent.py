@@ -1,4 +1,4 @@
-from typing import Any, Optional, List
+from typing import Any, Optional, List, Dict
 import json
 import logging
 import asyncio
@@ -10,6 +10,7 @@ from gpt_researcher.utils.enum import ReportSource, ReportType, Tone
 from gpt_researcher.llm_provider import GenericLLMProvider
 from gpt_researcher.prompts import get_prompt_family
 from gpt_researcher.vector_store import VectorStoreWrapper
+from gpt_researcher.utils.token_tracker import TokenTracker
 
 # Research skills
 # NOTE: This is a modified version of the ResearchConductor class
@@ -147,6 +148,8 @@ class GPTResearcher:
         self.verbose = verbose
         self.headers = headers or {}
         self.research_costs = 0.0
+        # Token tracking by model
+        self.token_counts = {}  # Format: {model_name: {"input": count, "output": count}}
         self.retrievers = get_retrievers(self.headers, self.cfg)
         self.memory = Memory(
             self.cfg.embedding_provider, self.cfg.embedding_model, **self.cfg.embedding_kwargs
@@ -158,7 +161,7 @@ class GPTResearcher:
         self._context_lock = asyncio.Lock()
         self._current_context = []
         self.context = context or []
-        self._context_size = 10
+        self.context_buffer_size = getattr(self.cfg, 'context_buffer_size', 10)
         self._last_update = None
 
         # Initialize components
@@ -358,8 +361,8 @@ class GPTResearcher:
         # Run deep research and get context
         self.context = await self.deep_researcher.run(on_progress=on_progress)
 
-        # Get total research costs
-        total_costs = self.get_costs()
+        # Get total research costs (global)
+        total_costs = TokenTracker.get_totals().get("cost", 0.0)
 
         # Log deep research completion with costs
         await self._log_event("research", step="deep_research_complete", details={
@@ -468,16 +471,71 @@ class GPTResearcher:
     def set_verbose(self, verbose: bool):
         self.verbose = verbose
 
-    def add_costs(self, cost: float) -> None:
+    def add_costs(self, cost: float, model: str = None, input_tokens: int = None, output_tokens: int = None) -> None:
+        """Add costs and optionally track token counts if provided"""
         if not isinstance(cost, (float, int)):
             raise ValueError("Cost must be an integer or float")
         self.research_costs += cost
+        
+        # If token information is provided, track it
+        if model and input_tokens is not None and output_tokens is not None:
+            self.add_token_count(model, input_tokens, output_tokens)
+        
         if self.log_handler:
             # Schedule the async log event without waiting
             asyncio.create_task(self._log_event("research", step="cost_update", details={
                 "cost": cost,
                 "total_cost": self.research_costs
             }))
+            
+    def add_token_count(self, model: str, input_tokens: int, output_tokens: int) -> None:
+        """Track token counts by model"""
+        if model not in self.token_counts:
+            self.token_counts[model] = {"input": 0, "output": 0}
+        self.token_counts[model]["input"] += input_tokens
+        self.token_counts[model]["output"] += output_tokens
+        
+        # Log token count update if log handler exists
+        if self.log_handler:
+            asyncio.create_task(self._log_event("research", step="token_count_update", details={
+                "model": model,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_token_counts": self.token_counts
+            }))
+            
+    def get_token_counts(self) -> Dict[str, Dict[str, int]]:
+        """Get the token counts by model"""
+        return self.token_counts.copy()
+    
+    def get_token_summary(self) -> str:
+        """Get a formatted summary of token usage by model"""
+        if not self.token_counts:
+            return "No token usage recorded."
+        
+        summary_lines = ["Token Usage Summary:"]
+        total_input = 0
+        total_output = 0
+        
+        for model, counts in self.token_counts.items():
+            input_tokens = counts.get("input", 0)
+            output_tokens = counts.get("output", 0)
+            total = input_tokens + output_tokens
+            
+            summary_lines.append(f"  {model}:")
+            summary_lines.append(f"    Input tokens:  {input_tokens:,}")
+            summary_lines.append(f"    Output tokens: {output_tokens:,}")
+            summary_lines.append(f"    Total tokens:  {total:,}")
+            
+            total_input += input_tokens
+            total_output += output_tokens
+        
+        summary_lines.append("\n  Overall Total:")
+        summary_lines.append(f"    Input tokens:  {total_input:,}")
+        summary_lines.append(f"    Output tokens: {total_output:,}")
+        summary_lines.append(f"    Total tokens:  {total_input + total_output:,}")
+        
+        return "\n".join(summary_lines)
             
     async def get_current_context(self) -> str:
         """Get current research context"""
@@ -496,8 +554,8 @@ class GPTResearcher:
                 self._current_context.append(new_content)
                 self._last_update = datetime.now()
                 # Keep only recent context
-                if len(self._current_context) > self._context_size:
-                    self._current_context = self._current_context[-self._context_size:]
+                if len(self._current_context) > self.context_buffer_size:
+                    self._current_context = self._current_context[-self.context_buffer_size:]
                     
     def _extract_learnings_from_context(self, context_list: List[str]) -> List[str]:
         """Extract learnings from context"""

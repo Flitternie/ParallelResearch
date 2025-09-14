@@ -8,7 +8,7 @@ import traceback
 from enum import Enum
 
 # NOTE: This is a modified version of the GPTResearcher class
-from modified_deep_research import DeepResearch
+from modified_deep_research import TaskState, DeepResearch
 from modified_agent import GPTResearcher
 from gpt_researcher.utils.enum import ReportType, ReportSource, Tone
 
@@ -16,16 +16,6 @@ from build_vector_db import load_vector_db
 from utils import ResearchProgress, trim_context_to_word_limit
 
 logger = logging.getLogger(__name__)
-
-
-class TaskState(Enum):
-    """Task lifecycle states"""
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    TERMINATED = "terminated"
-    CANCELLED = "cancelled"
-    FAILED = "failed"
 
 
 class AsyncQueryTask:
@@ -363,7 +353,7 @@ class RecursiveDeepResearch(DeepResearch):
             breadth=breadth,
             query=query,
             parent_id=parent_node_id,
-            status="started",
+            status=TaskState.STARTED.value,
             operation="research" if is_recursive else "plan",
             start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         )
@@ -389,6 +379,7 @@ class RecursiveDeepResearch(DeepResearch):
             await self.task_manager.register_task(query_task)
             
             async with self.semaphore:  # Control concurrency
+                researcher = None
                 try:
                     query_task.state = TaskState.RUNNING
                     query_task.start_time = datetime.now()
@@ -422,8 +413,17 @@ class RecursiveDeepResearch(DeepResearch):
                         parent_node_id=current_node_id
                     )
 
-                        # Conduct research
-                    await researcher.conduct_research()
+                    # Conduct research with timeout
+                    try:
+                        # Use configured timeout or default to 300 seconds
+                        research_timeout = getattr(self.config, "individual_research_timeout", 300)
+                        await asyncio.wait_for(
+                            researcher.conduct_research(),
+                            timeout=research_timeout
+                        )
+                    except asyncio.TimeoutError:
+                        logger.error(f"[DeepResearch] Research timed out after {research_timeout}s for query: {query[:100]}...")
+                        raise asyncio.TimeoutError(f"Research timed out for query: {query[:100]}...")
                     
                     # Process results
                     context = researcher.context
@@ -476,7 +476,7 @@ class RecursiveDeepResearch(DeepResearch):
                             breadth=new_breadth,
                             query=next_query,
                             parent_id=current_node_id,
-                            status="started",
+                            status=TaskState.STARTED.value,
                             operation="plan",
                             start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         )
@@ -504,13 +504,13 @@ class RecursiveDeepResearch(DeepResearch):
                             )
                             recursive_tasks.append(recursive_task)
                         
-                        # Wait for recursive tasks
-                        await asyncio.gather(*recursive_tasks)
+                        # Wait for recursive tasks (no timeout - let individual research timeouts handle it)
+                        await asyncio.gather(*recursive_tasks, return_exceptions=True)
                         
                         # Update planning node with generated queries - moved here to complete after all child nodes terminate
                         self.logger.update_node(
                             node_id=recursive_planning_node_id,
-                            status="completed",
+                            status=TaskState.COMPLETED.value,
                             results={"generated_queries": len(sub_queries)},
                             end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         )
@@ -519,12 +519,43 @@ class RecursiveDeepResearch(DeepResearch):
                         
                 except asyncio.CancelledError:
                     logger.info(f"[Recursive DeepResearch] Task {task_id} was cancelled")
+                    # Salvage partial data and mark node as cancelled
+                    try:
+                        salvage = await self._salvage_researcher_data(
+                            researcher,
+                            query_node_id=current_node_id,
+                            mark_status=TaskState.CANCELLED.value
+                        )
+                        # Feed salvaged data into task manager for aggregation with node annotations
+                        if salvage.get("visited"):
+                            await self.task_manager.add_direct_visited_urls(current_node_id, set(salvage["visited"]))
+                        for ctx in salvage.get("context", []) or []:
+                            await self.task_manager.add_direct_context(current_node_id, ctx)
+                        if salvage.get("sources"):
+                            await self.task_manager.add_direct_sources(current_node_id, salvage["sources"]) 
+                    except Exception as salvage_err:
+                        logger.error(f"[Recursive DeepResearch] Salvage on cancellation failed: {salvage_err}")
                     query_task.state = TaskState.CANCELLED
                     await self.task_manager.complete_task(task_id, error=asyncio.CancelledError("Task cancelled"))
                     raise
                 except Exception as e:
                     logger.error(f"[Recursive DeepResearch] Error in recursive research task {task_id}: {str(e)}")
                     logger.error(f"[Recursive DeepResearch] Exception traceback: {traceback.format_exc()}")
+                    # Best-effort salvage on error
+                    try:
+                        salvage = await self._salvage_researcher_data(
+                            researcher,
+                            query_node_id=current_node_id,
+                            mark_status=TaskState.FAILED.value
+                        )
+                        if salvage.get("visited"):
+                            await self.task_manager.add_direct_visited_urls(current_node_id, set(salvage["visited"]))
+                        for ctx in salvage.get("context", []) or []:
+                            await self.task_manager.add_direct_context(current_node_id, ctx)
+                        if salvage.get("sources"):
+                            await self.task_manager.add_direct_sources(current_node_id, salvage["sources"]) 
+                    except Exception as salvage_err:
+                        logger.error(f"[Recursive DeepResearch] Salvage on error failed: {salvage_err}")
                     query_task.state = TaskState.FAILED
                     await self.task_manager.complete_task(task_id, error=e)
                     raise e
@@ -557,15 +588,29 @@ class RecursiveDeepResearch(DeepResearch):
                 
                 logger.debug(f"[Recursive DeepResearch] Launched initial task {task_id} at depth {depth}")
             
-            # Wait for all initial tasks to complete
+            # Wait for all initial tasks to complete with timeout
             logger.debug(f"[Recursive DeepResearch] All initial tasks launched, waiting for completion...")
-            await asyncio.gather(*tasks)
+            try:
+                # Use configured global timeout or default to 3600 seconds (60 minutes)
+                root_timeout = getattr(self.config, "time_limit_seconds", 3600)
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=root_timeout
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"[DeepResearch] Root level tasks timed out after {root_timeout}s")
+                # Cancel all pending tasks
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                # Wait briefly for cancellation to complete
+                await asyncio.gather(*tasks, return_exceptions=True)
             
             # Get final results
             final_data = await self.task_manager.get_all_data()
             
             # Trim context to stay within word limits
-            trimmed_context = trim_context_to_word_limit(final_data['context'])
+            trimmed_context = trim_context_to_word_limit(final_data['context'], max_words=self.max_context_words)
             logger.info(f"Trimmed context from {len(final_data['context'])} items to {len(trimmed_context)} items")
             final_data['context'] = trimmed_context
 
@@ -582,7 +627,7 @@ class RecursiveDeepResearch(DeepResearch):
             
             self.logger.update_node(
                 node_id=current_node_id,
-                status="completed",
+                status=TaskState.COMPLETED.value,
                 results=combined_results,
                 visited_urls=node_results['visited_urls'] if not is_recursive else None,
                 end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")

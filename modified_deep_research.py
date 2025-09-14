@@ -6,6 +6,8 @@ import time
 from datetime import datetime, timedelta
 import traceback
 import re
+import contextlib
+from enum import Enum
 from pydantic import BaseModel
 
 # NOTE: This is a modified version of the GPTResearcher class
@@ -21,6 +23,16 @@ from utils import Config, ResearchLogger, ResearchProgress, trim_context_to_word
 
 # NOTE: This is a modified version from gpt_researcher.skills.deep_research
 logger = logging.getLogger(__name__)
+
+class TaskState(Enum):
+    """Task lifecycle states"""
+    STARTED = "started"
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    TERMINATED = "terminated"
+    CANCELLED = "cancelled"
+    FAILED = "error"
 
 
 class DeepResearch:
@@ -52,6 +64,17 @@ class DeepResearch:
         self.config = Config(config_path)
         self.breadth = self.config.max_breadth
         self.concurrency_limit = self.config.concurrency_limit
+        # Configurable context word limit (fallback to 25k words)
+        self.max_context_words = getattr(self.config, "max_context_words", 25000)
+
+        # Optional hard time limit in seconds; if not set, run until completion
+        # Expecting key TIME_LIMIT_SECONDS in config mapped to self.config.time_limit_seconds
+        self.time_limit_seconds = getattr(self.config, "time_limit_seconds", None)
+
+        # Accumulation lock to update class-level containers safely during concurrent processing
+        self._partial_lock = asyncio.Lock()
+        # Class-level citations store for early aggregation on timeout
+        self.citations: Dict[str, str] = {}
 
 
         self.researcher = GPTResearcher(
@@ -76,6 +99,64 @@ class DeepResearch:
                 })
             except Exception as e:
                 logger.error(f"Error in progress callback: {e}")
+
+    async def _salvage_researcher_data(
+        self,
+        researcher: Optional[GPTResearcher],
+        query_node_id: Optional[int] = None,
+        mark_status: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Safely salvage partial data from a researcher and update class-level stores.
+
+        Optionally marks the corresponding node with a final status (e.g., "cancelled").
+        Returns the salvaged collections for potential upstream use.
+        """
+        visited: Set[str] = set()
+        sources: List[str] = []
+        context: List[str] = []
+        try:
+            if researcher is not None:
+                try:
+                    visited = set(getattr(researcher, "visited_urls", set()) or [])
+                except Exception:
+                    visited = set()
+                try:
+                    sources = getattr(researcher, "research_sources", []) or []
+                except Exception:
+                    sources = []
+                try:
+                    ctx = getattr(researcher, "context", [])
+                    if isinstance(ctx, list):
+                        context = [c for c in ctx if isinstance(c, str)]
+                    elif isinstance(ctx, str):
+                        context = [ctx]
+                    else:
+                        context = []
+                except Exception:
+                    context = []
+
+            async with self._partial_lock:
+                if visited:
+                    self.visited_urls.update(visited)
+                if sources:
+                    self.research_sources.extend(sources)
+                if context:
+                    self.context.extend(context)
+
+            if mark_status and query_node_id is not None:
+                try:
+                    self.logger.update_node(
+                        node_id=query_node_id,
+                        status=mark_status,
+                        visited_urls=visited,
+                        end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    )
+                except Exception:
+                    pass
+        except Exception as salvage_err:
+            logger.debug(f"[DeepResearch] Salvage failed: {salvage_err}")
+
+        return {"visited": visited, "sources": sources, "context": context}
 
     async def generate_feedback(self, query: str, num_questions: int = 3) -> List[str]:
         """Generate follow-up questions to clarify research direction"""
@@ -250,7 +331,7 @@ Format each question on a new line starting with 'Question: '"""}
             breadth=breadth,
             query=query,
             parent_id=parent_node_id,
-            status="started",
+            status=TaskState.STARTED.value,
             operation="plan",
             start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         )
@@ -284,6 +365,8 @@ Format each question on a new line starting with 'Question: '"""}
 
         async def process_query(serp_query: Dict[str, str]) -> Optional[Dict[str, Any]]:
             async with semaphore:
+                researcher = None
+                query_node_id = None
                 try:
                     logger.debug(f"[DeepResearch] Starting process_query for: {serp_query['query']}")
                     progress.current_query = serp_query['query']
@@ -297,7 +380,7 @@ Format each question on a new line starting with 'Question: '"""}
                         query=serp_query['query'],
                         parent_id=current_node_id,
                         research_goal=serp_query['researchGoal'],
-                        status="started",
+                        status=TaskState.STARTED.value,
                         concurrent_group=concurrent_group_id,  # Add concurrent group tracking
                         operation="research",
                         start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -351,7 +434,12 @@ Format each question on a new line starting with 'Question: '"""}
                     # Log the completion of this query
                     self.logger.update_node(
                         node_id=query_node_id,
-                        status="completed",
+                        status=TaskState.COMPLETED.value,
+                        results={
+                            'learnings': results['learnings'],
+                            'citations': results['citations'],
+                            'researchGoal': serp_query['researchGoal']
+                        },
                         visited_urls=visited,
                         end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     )
@@ -369,18 +457,40 @@ Format each question on a new line starting with 'Question: '"""}
                         'sources': sources if sources else []
                     }
 
+                except asyncio.CancelledError:
+                    logger.info(f"[DeepResearch] process_query cancelled for: {serp_query['query']}")
+                    # Best-effort salvage of intermediate data from researcher before propagating cancellation
+                    try:
+                        await self._salvage_researcher_data(
+                            researcher,
+                            query_node_id=query_node_id,
+                            mark_status="cancelled"
+                        )
+                    except Exception as salvage_err:
+                        logger.debug(f"[DeepResearch] Salvage on cancellation failed: {salvage_err}")
+                    # Propagate cancellation so the outer timeout can stop promptly
+                    raise
                 except Exception as e:
                     logger.error(f"[DeepResearch] Error processing query '{serp_query['query']}': {str(e)}")
                     logger.error(f"[DeepResearch] Exception traceback: {traceback.format_exc()}")
                     # Log the error
                     try:
-                        self.logger.update_node(
-                            node_id=query_node_id,
-                            status="error",
-                            results={"error": str(e)}
-                        )
+                        if query_node_id is not None:
+                            self.logger.update_node(
+                                node_id=query_node_id,
+                                status=TaskState.FAILED.value,
+                                results={"error": str(e)}
+                            )
                     except Exception as log_error:
                         logger.error(f"[DeepResearch] Failed to log error: {log_error}")
+                    # Best-effort salvage of any partial data from researcher
+                    try:
+                        await self._salvage_researcher_data(
+                            researcher,
+                            query_node_id=query_node_id
+                        )
+                    except Exception as salvage_err:
+                        logger.debug(f"[DeepResearch] Salvage on cancellation failed: {salvage_err}")
                     return None
 
         # Process queries concurrently with limit
@@ -451,13 +561,13 @@ Format each question on a new line starting with 'Question: '"""}
         self.research_sources.extend(all_sources)
 
         # Trim context to stay within word limits
-        trimmed_context = trim_context_to_word_limit(all_context)
+        trimmed_context = trim_context_to_word_limit(all_context, max_words=self.max_context_words)
         logger.info(f"Trimmed context from {len(all_context)} items to {len(trimmed_context)} items to stay within word limit")
 
         # Log the completion of this research level
         self.logger.update_node(
             node_id=current_node_id,
-            status="completed",
+            status=TaskState.COMPLETED.value,
             results={
                 'learnings': list(set(all_learnings)),
                 'visited_urls': list(all_visited_urls),
@@ -481,8 +591,9 @@ Format each question on a new line starting with 'Question: '"""}
         logger.debug(f"[DeepResearch] run() started with query: {self.query}")
         start_time = time.time()
         
-        # Log initial costs
-        initial_costs = self.researcher.get_costs()
+        # Log initial global costs
+        from gpt_researcher.utils.token_tracker import TokenTracker
+        initial_costs = TokenTracker.get_totals().get("cost", 0.0)
 
         # # Get initial feedback
         # logger.debug(f"[DeepResearch] Generating feedback questions...")
@@ -500,24 +611,57 @@ Format each question on a new line starting with 'Question: '"""}
 
         # logger.debug(f"[DeepResearch] Starting deep_research with combined query...")
 
-        # Run deep research
-        results = await self.deep_research(
+        # Run deep research with optional hard timeout
+        results: Dict[str, Any] = {}
+        deep_task = asyncio.create_task(self.deep_research(
             query=self.query,
             breadth=self.breadth,
             depth=self.depth,
             on_progress=on_progress
-        )
+        ))
+
+        try:
+            if self.time_limit_seconds and self.time_limit_seconds > 0:
+                logger.info(f"[DeepResearch] Enforcing hard time limit: {self.time_limit_seconds} seconds")
+                results = await asyncio.wait_for(deep_task, timeout=self.time_limit_seconds)
+            else:
+                results = await deep_task
+        except asyncio.TimeoutError:
+            logger.warning("[DeepResearch] Time limit reached. Cancelling ongoing research and generating partial report.")
+            deep_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await deep_task
+            # Synthesize results from class-level accumulators
+            async with self._partial_lock:
+                results = {
+                    'learnings': list(set(self.learnings)),
+                    'visited_urls': list(self.visited_urls),
+                    'citations': dict(self.citations),
+                    'context': list(self.context),
+                    'sources': list(self.research_sources),
+                }
+        except asyncio.CancelledError:
+            # Propagate cancellation as partial completion
+            logger.warning("[DeepResearch] Research cancelled. Generating partial report.")
+            async with self._partial_lock:
+                results = {
+                    'learnings': list(set(self.learnings)),
+                    'visited_urls': list(self.visited_urls),
+                    'citations': dict(self.citations),
+                    'context': list(self.context),
+                    'sources': list(self.research_sources),
+                }
 
         logger.debug(f"[DeepResearch] deep_research completed, results: {len(results.get('visited_urls', []))} URLs, {len(results.get('learnings', []))} learnings")
 
-        # Get costs after deep research
-        research_costs = self.researcher.get_costs() - initial_costs
+        # Get global costs after deep research
+        research_costs = TokenTracker.get_totals().get("cost", 0.0) - initial_costs
 
         # Log research costs if we have a log handler
         if self.researcher.log_handler:
             await self.researcher._log_event("research", step="deep_research_costs", details={
                 "research_costs": research_costs,
-                "total_costs": self.researcher.get_costs()
+                "total_costs": TokenTracker.get_totals().get("cost", 0.0)
             })
 
         # Prepare context with citations
@@ -534,7 +678,7 @@ Format each question on a new line starting with 'Question: '"""}
             context_with_citations.extend(results['context'])
 
         # Trim final context to word limit
-        context_with_citations = trim_context_to_word_limit(context_with_citations)
+        context_with_citations = trim_context_to_word_limit(context_with_citations, max_words=self.max_context_words)
         
         # Set enhanced context and visited URLs
         self.researcher.context = """"""
@@ -567,5 +711,58 @@ Format each question on a new line starting with 'Question: '"""}
         report = await self.researcher.write_report()
 
         logger.debug(f"[DeepResearch] Report generated successfully, length: {len(report)}")
+        
+        # Save token usage to file if logs_dir is available
+        try:
+            # Use global token tracker
+            per_model = TokenTracker.get_per_model_totals()
+            totals = TokenTracker.get_totals()
+            token_counts = per_model
+            summary_lines = [
+                "Token Usage Summary (Global):",
+                f"  Total input tokens:  {totals.get('input_tokens', 0):,}",
+                f"  Total output tokens: {totals.get('output_tokens', 0):,}",
+                f"  Total tokens:        {totals.get('input_tokens', 0) + totals.get('output_tokens', 0):,}",
+                f"  Total cost:          ${totals.get('cost', 0.0):.4f}",
+                "",
+                "Per-Model Usage:",
+            ]
+            for model_name, stats in per_model.items():
+                input_t = int(stats.get("input", 0))
+                output_t = int(stats.get("output", 0))
+                cost_v = float(stats.get("cost", 0.0))
+                total_t = input_t + output_t
+                summary_lines.append(f"  {model_name}:")
+                summary_lines.append(f"    Input tokens:  {input_t:,}")
+                summary_lines.append(f"    Output tokens: {output_t:,}")
+                summary_lines.append(f"    Total tokens:  {total_t:,}")
+                summary_lines.append(f"    Cost:          ${cost_v:.4f}")
+            token_summary = "\n".join(summary_lines)
+            
+            # Save to logs directory
+            import json
+            import os
+            token_usage_path = os.path.join(self.logger.logs_dir, "token_usage.json")
+            with open(token_usage_path, "w") as f:
+                json.dump({
+                    "token_counts_by_model": token_counts,
+                    "total_cost": totals.get("cost", 0.0),
+                    "execution_time": str(execution_time),
+                    "summary": token_summary
+                }, f, indent=2)
+            
+            logger.info(f"Token usage saved to: {token_usage_path}")
+            
+            # Also save a human-readable summary
+            summary_path = os.path.join(self.logger.logs_dir, "token_usage_summary.txt")
+            with open(summary_path, "w") as f:
+                f.write(f"Research Query: {self.query}\n")
+                f.write(f"Execution Time: {execution_time}\n")
+                f.write(f"Total Cost: ${totals.get('cost', 0.0):.4f}\n\n")
+                f.write(token_summary)
+            
+        except Exception as e:
+            logger.warning(f"Failed to save token usage: {e}")
+
 
         return report

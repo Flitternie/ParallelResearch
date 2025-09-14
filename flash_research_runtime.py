@@ -6,7 +6,6 @@ import time
 from datetime import datetime
 import traceback
 from pydantic import BaseModel
-from enum import Enum
 
 # NOTE: This is a modified version of the GPTResearcher class
 from recursive_deep_research import TaskState, AsyncProgress, RecursiveDeepResearch, NodeResults as BaseNodeResults, AsyncTaskManager as BaseAsyncTaskManager, AsyncQueryTask
@@ -354,7 +353,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
             breadth=breadth,
             query=query,
             parent_id=parent_node_id,
-            status="started",
+            status=TaskState.STARTED.value,
             operation="research" if is_recursive else "plan",
             start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         )
@@ -389,6 +388,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
             await self.task_manager.register_task(query_task)
             
             async with self.semaphore:  # Control concurrency
+                researcher = None
                 try:
                     query_task.state = TaskState.RUNNING
                     query_task.start_time = datetime.now()
@@ -423,24 +423,29 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                         parent_node_id=current_node_id
                     )
 
-                    # Start research with monitoring if enabled
-                    if self.enable_early_termination:
-                        try:
-                            # Conduct research (monitoring runs in parallel)
+                    # Conduct research with timeout (consistent with recursive implementation)
+                    try:
+                        # Use configured timeout or default to 300 seconds
+                        research_timeout = getattr(self.config, "individual_research_timeout", 300)
+                        if self.enable_early_termination:
+                            # Conduct research with monitoring (monitoring runs in parallel)
                             research_task = asyncio.create_task(researcher.conduct_research())
                             self.task_manager.tasks[current_node_id] = research_task 
-                        except Exception as e:
-                            logger.error(f"[FlashResearch] Error during research: {e}")
-                            raise
-                        # Start monitoring task that will run throughout entire node lifecycle
-                        monitor_task = asyncio.create_task(
-                            self._monitor_research_progress(researcher, query, current_node_id, start_time)
-                        )
-                        # Wait for research to complete before harvesting results to avoid partial context/citations
-                        await research_task
-                    else:
-                        # Conduct research without monitoring
-                        await researcher.conduct_research()
+                            # Start monitoring task that will run throughout entire node lifecycle
+                            monitor_task = asyncio.create_task(
+                                self._monitor_research_progress(researcher, query, current_node_id, start_time)
+                            )
+                            # Wait for research to complete with timeout before harvesting results
+                            await asyncio.wait_for(research_task, timeout=research_timeout)
+                        else:
+                            # Conduct research without monitoring but with timeout
+                            await asyncio.wait_for(
+                                researcher.conduct_research(),
+                                timeout=research_timeout
+                            )
+                    except asyncio.TimeoutError:
+                        logger.error(f"[FlashResearch] Research timed out after {research_timeout}s for query: {query[:100]}...")
+                        raise asyncio.TimeoutError(f"Research timed out for query: {query[:100]}...")
                     
                     # Calculate execution time
                     execution_time = time.time() - start_time
@@ -504,7 +509,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                             breadth=new_breadth,
                             query=next_query,
                             parent_id=current_node_id,
-                            status="started",
+                            status=TaskState.STARTED.value,
                             operation="plan",
                             start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         )
@@ -534,13 +539,13 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                             )
                             recursive_tasks.append(recursive_task)
                         
-                        # Wait for recursive tasks
-                        await asyncio.gather(*recursive_tasks)
+                        # Wait for recursive tasks (no timeout - let individual research timeouts handle it)
+                        await asyncio.gather(*recursive_tasks, return_exceptions=True)
 
                         # Update planning node with generated queries
                         self.logger.update_node(
                             node_id=recursive_planning_node_id,
-                            status="completed",
+                            status=TaskState.COMPLETED.value,
                             results={"generated_queries": len(sub_queries)},
                             end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         )
@@ -557,6 +562,22 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                         
                 except asyncio.CancelledError:
                     logger.info(f"[FlashResearch] Task {task_id} was cancelled")
+                    # Best-effort salvage of intermediate data
+                    try:
+                        salvage = await self._salvage_researcher_data(
+                            researcher,
+                            query_node_id=current_node_id,
+                            mark_status=TaskState.CANCELLED.value
+                        )
+                        # Feed salvaged data into task manager with node annotations
+                        if salvage.get("visited"):
+                            await self.task_manager.add_direct_visited_urls(current_node_id, set(salvage["visited"]))
+                        for ctx in salvage.get("context", []) or []:
+                            await self.task_manager.add_direct_context(current_node_id, ctx)
+                        if salvage.get("sources"):
+                            await self.task_manager.add_direct_sources(current_node_id, salvage["sources"]) 
+                    except Exception as salvage_err:
+                        logger.error(f"[FlashResearch] Salvage on cancellation failed: {salvage_err}")
                     query_task.state = TaskState.CANCELLED
                     await self.task_manager.complete_task(task_id, error=asyncio.CancelledError("Task cancelled"))
                     self.logger.update_node(
@@ -570,6 +591,21 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                 except Exception as e:
                     logger.error(f"[FlashResearch] Error in recursive research task {task_id}: {str(e)}")
                     logger.error(f"[FlashResearch] Exception traceback: {traceback.format_exc()}")
+                    # Best-effort salvage of intermediate data
+                    try:
+                        salvage = await self._salvage_researcher_data(
+                            researcher,
+                            query_node_id=current_node_id,
+                            mark_status=TaskState.FAILED.value
+                        )
+                        if salvage.get("visited"):
+                            await self.task_manager.add_direct_visited_urls(current_node_id, set(salvage["visited"]))
+                        for ctx in salvage.get("context", []) or []:
+                            await self.task_manager.add_direct_context(current_node_id, ctx)
+                        if salvage.get("sources"):
+                            await self.task_manager.add_direct_sources(current_node_id, salvage["sources"]) 
+                    except Exception as salvage_err:
+                        logger.error(f"[FlashResearch] Salvage on cancellation failed: {salvage_err}")
                     query_task.state = TaskState.FAILED
                     await self.task_manager.complete_task(task_id, error=e)
                     self.logger.update_node(
@@ -615,15 +651,29 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                 
                 logger.debug(f"[FlashResearch] Launched initial task {task_id} at depth {depth}")
             
-            # Wait for all initial tasks to complete
+            # Wait for all initial tasks to complete with timeout (consistent with recursive implementation)
             logger.debug(f"[FlashResearch] All initial tasks launched, waiting for completion...")
-            await asyncio.gather(*tasks)
+            try:
+                # Use configured global timeout or default to 3600 seconds (60 minutes)
+                root_timeout = getattr(self.config, "time_limit_seconds", 3600)
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=root_timeout
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"[FlashResearch] Root level tasks timed out after {root_timeout}s")
+                # Cancel all pending tasks
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                # Wait briefly for cancellation to complete
+                await asyncio.gather(*tasks, return_exceptions=True)
             
             # Get final results
             final_data = await self.task_manager.get_all_data()
             
             # Trim context to stay within word limits
-            trimmed_context = trim_context_to_word_limit(final_data['context'])
+            trimmed_context = trim_context_to_word_limit(final_data['context'], max_words=self.max_context_words)
             logger.info(f"Trimmed context from {len(final_data['context'])} items to {len(trimmed_context)} items")
             final_data['context'] = trimmed_context
 
@@ -641,7 +691,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
             
             self.logger.update_node(
                 node_id=current_node_id,
-                status="completed" if self.logger.get_node_status(current_node_id) == "started" else self.logger.get_node_status(current_node_id),
+                status=TaskState.COMPLETED.value if self.logger.get_node_status(current_node_id) == TaskState.STARTED.value else self.logger.get_node_status(current_node_id),
                 results=combined_results,
                 visited_urls=node_results['visited_urls'] if not is_recursive else None,
                 end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -658,12 +708,17 @@ class FlashResearchRuntime(RecursiveDeepResearch):
         try:
             logger.debug(f"[FlashResearch] Starting research monitoring for node {node_id}")
             
+            # Track last evaluated content size to avoid redundant LLM calls
+            last_eval_ctx_len = 0
+            last_eval_learnings_count = 0
+            
             while True:
-                await asyncio.sleep(8)  # Check every 5 seconds
+                await asyncio.sleep(8)  # Check every 8 seconds
                 
-                # Check for timeout
+                # Check for timeout (use configured timeout or class default)
                 execution_time = time.time() - start_time
-                if execution_time >= self.max_task_execution_time:
+                task_timeout = getattr(self.config, "individual_research_timeout", self.max_task_execution_time)
+                if execution_time >= task_timeout:
                     logger.debug(f"[FlashResearch] Node {node_id} timed out after {execution_time:.2f}s")
                     await self.task_manager.update_runtime_data(
                         node_id, 
@@ -688,10 +743,22 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                     current_learnings = self._extract_learnings_from_context(current_context)
                     
                     if current_context or current_learnings:
+                        # Only evaluate if there is meaningful change since last evaluation
+                        ctx_growth = len(current_context) - last_eval_ctx_len
+                        learnings_growth = len(current_learnings) - last_eval_learnings_count
+                        
+                        if ctx_growth < 200 and learnings_growth < 3:
+                            # Not enough new information; skip LLM evaluation this tick
+                            continue
+                        
                         # Evaluate goal satisfaction
                         satisfaction_decision = await self.task_manager.evaluate_goal_satisfaction(
                             query, current_context, current_learnings, self.config
                         )
+                        
+                        # Update last evaluation markers after a successful eval
+                        last_eval_ctx_len = len(current_context)
+                        last_eval_learnings_count = len(current_learnings)
 
                         logger.debug(f"[FlashResearch] Monitoring Node {node_id} Goal Satisfied: {satisfaction_decision.is_goal_satisfied}")
                         logger.debug(f"[FlashResearch] Monitoring Node {node_id} Satisfaction Score: {satisfaction_decision.satisfaction_score}")
