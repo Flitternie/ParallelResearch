@@ -51,10 +51,8 @@ def setup_environment():
     try:
         os.environ["OPENAI_API_KEY"] = open("./openai.key").read().strip()
         os.environ["OPENAI_BASE_URL"] = open("openai_url.key").read().strip()
-        os.environ["BRAVE_API_KEY"] = open("./brave.key").read().strip()
         os.environ["CUSTOM_EMBED_API_KEY"] = open("./openai.key").read().strip()
         os.environ["CUSTOM_EMBED_BASE_URL"] = "http://0.0.0.0:8000/v1/"
-        # os.environ["CUSTOM_EMBED_BASE_URL"] = open("openai_url.key").read().strip()
     except FileNotFoundError as e:
         raise RuntimeError(f"Missing API key file: {e}")
 

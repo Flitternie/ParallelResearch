@@ -1,5 +1,6 @@
 .vscode
 .env
+.github
 __pycache__
 
 /exp
@@ -9,6 +10,7 @@ __pycache__
 /database
 /evaluation
 /webpage
+/paper
 
 /vector_db
 /deepresearch_benchmarking
