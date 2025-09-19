@@ -16,7 +16,7 @@ from gpt_researcher.utils.llm import create_chat_completion
 from gpt_researcher.utils.enum import ReportType, ReportSource, Tone
 
 from build_vector_db import load_vector_db
-from utils import ResearchLogger, ResearchProgress, trim_context_to_word_limit
+from utils import Config, ResearchLogger, ResearchProgress, trim_context_to_word_limit
 
 logger = logging.getLogger(__name__)
 
@@ -116,8 +116,8 @@ class AsyncTaskManager(BaseAsyncTaskManager):
             else:
                 return GoalSatisfactionDecision(
                     is_goal_satisfied=False,
-                    satisfaction_score=0.5,
-                    quality_score=0.5,
+                    satisfaction_score=0,
+                    quality_score=0,
                     reasoning="Circuit breaker active",
                 )
         
@@ -137,8 +137,8 @@ class AsyncTaskManager(BaseAsyncTaskManager):
                 
                 return GoalSatisfactionDecision(
                     is_goal_satisfied=False,
-                    satisfaction_score=0.5,
-                    quality_score=0.5,
+                    satisfaction_score=0,
+                    quality_score=0,
                     reasoning=f"Evaluation error: {str(e)[:100]}",
                 )
     
@@ -279,10 +279,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
         logs_dir: str = "research_progress.json",  # New parameter for logging
         progress_callback: Optional[callable] = None,  # New parameter for progress updates
         # Runtime-specific parameters
-        satisfaction_threshold: float = 0.5,
-        quality_threshold: float = 0.5,
         max_task_execution_time: float = 300.0,
-        enable_early_termination: bool = True
     ):
         super().__init__(
             query=query,
@@ -296,10 +293,10 @@ class FlashResearchRuntime(RecursiveDeepResearch):
         )
         
         # Runtime parameters
-        self.satisfaction_threshold = satisfaction_threshold
-        self.quality_threshold = quality_threshold
+        self.satisfaction_threshold = self.config.runtime_satisfaction_threshold
+        self.quality_threshold = self.config.runtime_quality_threshold
         self.max_task_execution_time = max_task_execution_time
-        self.enable_early_termination = enable_early_termination  
+        self.enable_early_termination = True  
 
         self.task_manager = AsyncTaskManager(self.logger)
         self.progress_tracker = AsyncProgress(depth, self.config.max_breadth)
@@ -774,9 +771,8 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                         
                         # Check if should terminate early
                         should_terminate = (
-                            satisfaction_decision.is_goal_satisfied or 
-                            satisfaction_decision.satisfaction_score >= self.satisfaction_threshold or
-                            satisfaction_decision.quality_score >= self.quality_threshold
+                            satisfaction_decision.satisfaction_score > self.satisfaction_threshold or
+                            satisfaction_decision.quality_score > self.quality_threshold
                         )
                         
                         if should_terminate:

@@ -370,12 +370,12 @@ if __name__ == "__main__":
     parser.add_argument("--input", help="Directory containing .q files")
     parser.add_argument("--output", help="Directory to save .a files")
     parser.add_argument("--config", default="./config.json", help="Path to config.json file")
-    parser.add_argument("--workers", type=int, default=4,
-                       help="Maximum number of concurrent workers (default: 4)")
+    parser.add_argument("--workers", type=int, default=16,
+                       help="Maximum number of concurrent workers (default: 16)")
     parser.add_argument("--k", dest="k_answers", type=int, default=1,
                        help="Number of answers to generate per question (default: 1)")
-    parser.add_argument("--timeout", type=int, default=1000,
-                       help="Per-run timeout in seconds; 0 disables timeout (default: 1000)")
+    parser.add_argument("--timeout", type=int, default=6000,
+                       help="Per-run timeout in seconds; 0 disables timeout (default: 6000)")
     parser.add_argument("--retries", type=int, default=3,
                        help="Number of attempts per run on timeout (default: 3)")
     parser.add_argument("--retry-delay", type=float, default=1.0,

@@ -13,7 +13,7 @@ os.environ["OPENAI_API_KEY"] = open("./openai.key").read().strip()
 os.environ["OPENAI_BASE_URL"] = open("openai_url.key").read().strip()
 
 class ReportGenerator:
-    def __init__(self, progress_file: str, config_file: str, root_id: str | None = None):
+    def __init__(self, progress_file: str, config_file: str, root_id: str | None = None, random_seed: int | None = None):
         # Load full progress log (nodes + edges)
         self.log = self._load_progress(progress_file)
         raw_nodes = self.log.get('nodes', {}) if self.log else {}
@@ -37,6 +37,9 @@ class ReportGenerator:
         self._compute_depths()
 
         self.query = self._load_user_query()
+        # Deterministic RNG if seed provided
+        self.random_seed = random_seed
+        self.rng = random.Random(random_seed) if random_seed is not None else random.Random()
         self.config = Config(config_file)
         self.researcher = GPTResearcher(
             query=self.query,
@@ -163,6 +166,136 @@ class ReportGenerator:
             if root_node:
                 return root_node.get('query', '').strip().split('\n')[0].strip()
         return ''
+
+    def _format_ascii_levels(self, levels: dict[int, list[str]], title: str) -> str:
+        # Deprecated by _print_ascii_tree_summary but kept for compatibility; delegates to it without metadata
+        lines: list[str] = []
+        lines.append(title)
+        max_level = max(levels.keys()) if levels else 0
+        total = sum(len(v) for v in (levels or {}).values())
+        lines.append(f"Layers: {max_level} | Total nodes: {total}")
+        counts = ", ".join([f"L{lvl}={len(levels.get(lvl, []))}" for lvl in range(1, max_level + 1)]) if max_level else ""
+        lines.append(f"Nodes per layer: {counts}")
+        for lvl in range(1, max_level + 1):
+            nodes = levels.get(lvl, [])
+            sample = nodes[:10]
+            more = f" ...( +{len(nodes) - len(sample)} more)" if len(nodes) > len(sample) else ""
+            lines.append(f"L{lvl} [{len(nodes)}]: " + " ".join(sample) + more)
+        return "\n".join(lines)
+
+    def _print_ascii_tree_summary(self, stage: str, max_depth: int | None, max_breadth: int | None, levels: dict[int, list[str]]) -> None:
+        # Standardized ASCII block for before/after filtering
+        max_level = max(levels.keys()) if levels else 0
+        total = sum(len(v) for v in (levels or {}).values())
+        depth_str = str(max_depth) if max_depth is not None else "full"
+        breadth_str = str(max_breadth) if max_breadth is not None else "none"
+        counts = ", ".join([f"L{lvl}={len(levels.get(lvl, []))}" for lvl in range(1, max_level + 1)]) if max_level else ""
+        print(f"=== Tree Summary ({stage}) ===")
+        print(f"Depth limit: {depth_str} | Breadth limit: {breadth_str}")
+        print(f"Layers: {max_level} | Total nodes: {total}")
+        print(f"Nodes per layer: {counts}")
+        for lvl in range(1, max_level + 1):
+            nodes = levels.get(lvl, [])
+            sample = nodes[:10]
+            more = f" ...( +{len(nodes) - len(sample)} more)" if len(nodes) > len(sample) else ""
+            print(f"L{lvl} [{len(nodes)}]: " + " ".join(sample) + more)
+
+    def print_ascii_tree_all(self, max_depth: int | None = None) -> None:
+        # Standardized summary BEFORE filtering
+        levels = self._level_research_nodes(max_depth=max_depth)
+        self._print_ascii_tree_summary(stage="BEFORE", max_depth=max_depth, max_breadth=None, levels=levels)
+
+    def _select_research_nodes_by_breadth_levels(self, max_breadth: int, max_depth: int | None) -> dict[int, list[str]]:
+        # Select research nodes per level using breadth sampling rule; returns per-level mapping
+        if not self.depths:
+            self._compute_depths()
+        target_max_depth = max_depth if max_depth is not None else self.get_max_depth()
+        levels = self._level_research_nodes(max_depth=target_max_depth)
+        rng = self.rng
+        selected: dict[int, list[str]] = {}
+        if target_max_depth is None or target_max_depth <= 0:
+            return {1: []}
+        b_curr = int(max_breadth)
+        lvl1_nodes = list(levels.get(1, []))
+        if b_curr > 0 and lvl1_nodes:
+            if len(lvl1_nodes) > b_curr:
+                selected[1] = rng.sample(lvl1_nodes, b_curr)
+            else:
+                selected[1] = list(lvl1_nodes)
+        else:
+            selected[1] = []
+        prev_b = b_curr
+        for lvl in range(2, (target_max_depth or 0) + 1):
+            next_b = max(2, prev_b // 2) if max_breadth > 1 else max_breadth
+            chosen: list[str] = []
+            for parent in selected.get(lvl - 1, []):
+                candidates = self._research_children_next_level(parent, lvl)
+                if not candidates:
+                    continue
+                k = min(next_b, len(candidates))
+                if len(candidates) > k:
+                    chosen.extend(rng.sample(candidates, k))
+                else:
+                    chosen.extend(candidates)
+            # Deduplicate preserving order
+            seen = set()
+            deduped: list[str] = []
+            for nid in chosen:
+                if nid in seen:
+                    continue
+                seen.add(nid)
+                deduped.append(nid)
+            selected[lvl] = deduped
+            prev_b = next_b
+        return selected
+
+    def print_ascii_tree_filtered(self, max_depth: int | None = None, max_breadth: int | None = None) -> None:
+        # Print ASCII summary after applying depth and optional breadth filtering (research nodes only)
+        target_max_depth = max_depth if max_depth is not None else self.get_max_depth()
+        if max_breadth is None or max_breadth <= 0:
+            levels = self._level_research_nodes(max_depth=target_max_depth)
+            self._print_ascii_tree_summary(stage="AFTER", max_depth=target_max_depth, max_breadth=None, levels=levels)
+            return
+        levels = self._select_research_nodes_by_breadth_levels(max_breadth, target_max_depth)
+        # Ensure all levels exist up to target_max_depth
+        for lvl in range(1, (target_max_depth or 0) + 1):
+            _ = levels.setdefault(lvl, [])
+        self._print_ascii_tree_summary(stage="AFTER", max_depth=target_max_depth, max_breadth=max_breadth, levels=levels)
+
+    def verify_breadth_filtered(self, max_depth: int | None, max_breadth: int | None) -> dict:
+        # Verify counts after applying breadth filtering against theoretical counts from provided max_breadth
+        if max_breadth is None or max_breadth <= 0:
+            # Nothing to verify beyond depth-only; reuse pre-filter verification
+            return self.verify_breadth(max_depth=max_depth)
+        target_max_depth = max_depth if max_depth is not None else self.get_max_depth()
+        levels = self._select_research_nodes_by_breadth_levels(int(max_breadth), target_max_depth)
+        # Normalize levels to full depth range
+        for lvl in range(1, (target_max_depth or 0) + 1):
+            _ = levels.setdefault(lvl, [])
+        actual = {lvl: len(nodes) for lvl, nodes in sorted(levels.items())}
+        expected = self._expected_level_counts(int(max_breadth), target_max_depth or 0)
+        report_levels = []
+        all_ok = True
+        for lvl in range(1, (target_max_depth or 0) + 1):
+            a = int(actual.get(lvl, 0))
+            e = int(expected.get(lvl, 0))
+            ok = a == e
+            if not ok:
+                all_ok = False
+            report_levels.append({'level': lvl, 'actual': a, 'expected': e, 'ok': ok})
+        return {
+            'max_depth': target_max_depth or 0,
+            'max_breadth': int(max_breadth),
+            'levels': report_levels,
+            'ok': all_ok
+        }
+
+    def print_verify_breadth_filtered(self, max_depth: int | None = None, max_breadth: int | None = None) -> None:
+        v = self.verify_breadth_filtered(max_depth=max_depth, max_breadth=max_breadth)
+        parts = []
+        for lv in v.get('levels', []):
+            parts.append(f"L{lv['level']}: {lv['actual']} (exp {lv['expected']}{'' if lv['ok'] else '!)'})")
+        print("Filtered breadth check -> " + ", ".join(parts))
     
     def _parse_dt(self, value: str | None) -> datetime | None:
         if not value:
@@ -209,7 +342,10 @@ class ReportGenerator:
             return self._order_bfs(node_ids)
         if ordering in ("random", "shuffle"):
             ids = list(node_ids)
-            random.shuffle(ids)
+            try:
+                self.rng.shuffle(ids)
+            except Exception:
+                random.shuffle(ids)
             return ids
         # time-based
         reverse = ordering.endswith("_desc")
@@ -284,13 +420,187 @@ class ReportGenerator:
                 order.append(nid)
         return order
 
-    def compile_data(self, max_depth: int | None = None, ordering: str | None = None) -> dict:
+    def _level_research_nodes(self, max_depth: int | None = None) -> dict[int, list[str]]:
+        # Returns mapping: semantic depth -> list of research node ids at that depth (depth starts at 1)
+        if not self.depths:
+            self._compute_depths()
+        target_max_depth = max_depth if max_depth is not None else self.get_max_depth()
+        levels: dict[int, list[str]] = {}
+        for nid, d in (self.depths or {}).items():
+            if d is None or d == 0:
+                continue
+            if d > target_max_depth:
+                continue
+            node = self.nodes.get(str(nid), {})
+            if node.get('operation') != 'research':
+                continue
+            levels.setdefault(int(d), []).append(str(nid))
+        # Ensure all levels up to target_max_depth exist
+        for lvl in range(1, (target_max_depth or 0) + 1):
+            _ = levels.setdefault(lvl, [])
+        return levels
+
+    def _descendants(self, nid: str) -> list[str]:
+        # All descendants (any operation) following edges
+        nid = str(nid)
+        result: list[str] = []
+        stack = [nid]
+        visited = set([nid])
+        while stack:
+            cur = stack.pop()
+            for ch in self.children.get(str(cur), []):
+                if ch in visited:
+                    continue
+                visited.add(ch)
+                result.append(str(ch))
+                stack.append(ch)
+        return result
+
+    def _research_children_next_level(self, parent_id: str, next_level: int) -> list[str]:
+        # Research descendants of parent that are exactly one semantic level deeper
+        parent_id = str(parent_id)
+        target = int(next_level)
+        result: list[str] = []
+        for ch in self._descendants(parent_id):
+            node = self.nodes.get(str(ch), {})
+            if node.get('operation') != 'research':
+                continue
+            if self.depths.get(str(ch)) == target:
+                result.append(str(ch))
+        return result
+
+    def get_breadth_counts(self, max_depth: int | None = None) -> dict[int, int]:
+        levels = self._level_research_nodes(max_depth=max_depth)
+        return {lvl: len(nodes) for lvl, nodes in sorted(levels.items())}
+
+    def _expected_level_counts(self, initial_breadth: int, max_depth: int) -> dict[int, int]:
+        # Compute expected total nodes per level using iterative halving rule with floor and minimum of 2 per deep_research
+        counts: dict[int, int] = {}
+        if initial_breadth <= 0 or max_depth <= 0:
+            return {lvl: 0 for lvl in range(1, max_depth + 1)}
+        b = int(initial_breadth)
+        cumulative = 1
+        for lvl in range(1, max_depth + 1):
+            if lvl == 1:
+                cumulative = b
+            else:
+                b = max(2, b // 2) if initial_breadth > 1 else initial_breadth
+                cumulative *= b
+            counts[lvl] = cumulative
+        return counts
+
+    def verify_breadth(self, max_depth: int | None = None) -> dict:
+        # Verify actual per-level counts against expected counts derived from level 1 breadth
+        target_max_depth = max_depth if max_depth is not None else self.get_max_depth()
+        actual = self.get_breadth_counts(max_depth=target_max_depth)
+        initial_breadth = int(actual.get(1, 0))
+        expected = self._expected_level_counts(initial_breadth, target_max_depth or 0)
+        levels_report = []
+        all_ok = True
+        for lvl in range(1, (target_max_depth or 0) + 1):
+            a = int(actual.get(lvl, 0))
+            e = int(expected.get(lvl, 0))
+            ok = a == e
+            if not ok:
+                all_ok = False
+            levels_report.append({
+                'level': lvl,
+                'actual': a,
+                'expected': e,
+                'ok': ok
+            })
+        return {
+            'max_depth': target_max_depth or 0,
+            'initial_breadth': initial_breadth,
+            'levels': levels_report,
+            'ok': all_ok
+        }
+
+    def assert_breadth(self, max_depth: int | None = None) -> None:
+        v = self.verify_breadth(max_depth=max_depth)
+        if not v.get('ok', False):
+            parts = []
+            for lv in v.get('levels', []):
+                if not lv.get('ok', False):
+                    parts.append(f"L{lv['level']}: {lv['actual']} vs expected {lv['expected']}")
+            details = ", ".join(parts)
+            raise ValueError(f"Breadth verification failed (before filtering). {details}")
+
+    def _select_nodes_by_breadth(self, max_breadth: int, max_depth: int | None) -> list[str]:
+        # Select research nodes according to breadth sampling per level. Also include their research_execution descendants.
+        if not self.depths:
+            self._compute_depths()
+        target_max_depth = max_depth if max_depth is not None else self.get_max_depth()
+        if not target_max_depth:
+            return []
+        # Build mapping of research nodes by level
+        levels = self._level_research_nodes(max_depth=target_max_depth)
+        # Level 1 selection
+        rng = self.rng
+        selected_by_level: dict[int, list[str]] = {}
+        b_curr = int(max_breadth)
+        lvl1_nodes = list(levels.get(1, []))
+        if b_curr <= 0 or not lvl1_nodes:
+            return []
+        if len(lvl1_nodes) > b_curr:
+            selected_by_level[1] = rng.sample(lvl1_nodes, b_curr)
+        else:
+            selected_by_level[1] = list(lvl1_nodes)
+        # Deeper levels
+        prev_b = b_curr
+        for lvl in range(2, (target_max_depth or 0) + 1):
+            next_b = max(2, prev_b // 2) if max_breadth > 1 else max_breadth
+            chosen: list[str] = []
+            for parent in selected_by_level.get(lvl - 1, []):
+                candidates = self._research_children_next_level(parent, lvl)
+                if not candidates:
+                    continue
+                k = min(next_b, len(candidates))
+                if len(candidates) > k:
+                    chosen.extend(rng.sample(candidates, k))
+                else:
+                    chosen.extend(candidates)
+            # Deduplicate preserving order
+            seen = set()
+            deduped: list[str] = []
+            for nid in chosen:
+                if nid in seen:
+                    continue
+                seen.add(nid)
+                deduped.append(nid)
+            selected_by_level[lvl] = deduped
+            prev_b = next_b
+        # Aggregate selected research nodes
+        selected_research: list[str] = []
+        for lvl in range(1, (target_max_depth or 0) + 1):
+            selected_research.extend(selected_by_level.get(lvl, []))
+        # Include research_execution descendants of selected research nodes
+        include_ids: set[str] = set(selected_research)
+        for rid in selected_research:
+            for d in self._descendants(rid):
+                node = self.nodes.get(str(d), {})
+                if node.get('operation') == 'research_execution':
+                    include_ids.add(str(d))
+        return list(include_ids)
+
+    def compile_data(self, max_depth: int | None = None, ordering: str | None = None, max_breadth: int | None = None) -> dict:
         if not self.nodes:
             return {}
         
         # Select nodes by depth and ordering, skipping plan/aggregate nodes
         eligible_ids = self._eligible_node_ids(max_depth)
-        ordered_ids = self._order_node_ids(eligible_ids, ordering or 'start_time_asc')
+        eligible_set = set(eligible_ids)
+        # Apply breadth sampling if requested
+        if isinstance(max_breadth, int) and max_breadth is not None and max_breadth > 0:
+            target_max_depth = max_depth if max_depth is not None else self.get_max_depth()
+            selected_ids = self._select_nodes_by_breadth(max_breadth, target_max_depth)
+            # Keep only eligible
+            selected_set = {str(nid) for nid in selected_ids if str(nid) in eligible_set}
+            # Order all eligible then filter to selected to keep stable ordering strategy
+            ordered_all = self._order_node_ids(list(eligible_set), ordering or 'start_time_asc')
+            ordered_ids = [nid for nid in ordered_all if str(nid) in selected_set]
+        else:
+            ordered_ids = self._order_node_ids(eligible_ids, ordering or 'start_time_asc')
 
         # Extract relevant data from selected nodes
         research_data = {
@@ -398,19 +708,42 @@ if __name__ == "__main__":
                         choices=['start_time_asc','start_time_desc','end_time_asc','end_time_desc','dfs','bfs','random'],
                         help='Ordering strategy for node aggregation.')
     parser.add_argument('--root_id', type=str, default=None, help='Override root node id if not auto-detected.')
+    parser.add_argument('--max_breadth', type=int, default=None, help='Limit breadth per level via sampling (level1=B, level2=max(2,B//2) per parent, etc.).')
+    parser.add_argument('--random_seed', type=int, default=42, help='Random seed for deterministic sampling and ordering.')
 
     args = parser.parse_args()
     
-    generator = ReportGenerator(args.progress, args.config, root_id=args.root_id)
+    generator = ReportGenerator(args.progress, args.config, root_id=args.root_id, random_seed=args.random_seed)
     stats = generator.get_tree_summary()
     print(f"Progress tree -> root_id: {stats['root_id']}, nodes: {stats['nodes']}, edges: {stats['edges']}, max_depth: {stats['max_depth']}")
-    research_data = generator.compile_data(max_depth=args.max_depth, ordering=args.ordering)
-    if args.max_depth is not None:
-        try:
-            eligible = len(generator._eligible_node_ids(args.max_depth))
-            print(f"Selected nodes with max_depth={args.max_depth}: {eligible}")
-        except Exception:
-            pass
+    # ASCII summary before filtering
+    try:
+        generator.print_ascii_tree_all(max_depth=args.max_depth)
+    except Exception:
+        pass
+    # Breadth verification
+    try:
+        verification = generator.verify_breadth(max_depth=args.max_depth)
+        lv_summ = ", ".join([f"L{lv['level']}: {lv['actual']} (exp {lv['expected']}{'' if lv['ok'] else '!)'})" for lv in verification.get('levels', [])])
+        print(f"Breadth by level -> {lv_summ}")
+        # Raise if the pre-filter breadth is inconsistent
+        generator.assert_breadth(max_depth=args.max_depth)
+    except Exception as e:
+        raise
+    if args.max_breadth is not None:
+        print(f"Applying max_breadth={args.max_breadth}")
+    research_data = generator.compile_data(max_depth=args.max_depth, ordering=args.ordering, max_breadth=args.max_breadth)
+    # ASCII summary after filtering (depth/breadth)
+    try:
+        generator.print_ascii_tree_filtered(max_depth=args.max_depth, max_breadth=args.max_breadth)
+    except Exception:
+        pass
+    # Verify filtered breadth strictly
+    try:
+        generator.print_verify_breadth_filtered(max_depth=args.max_depth, max_breadth=args.max_breadth)
+        generator.assert_breadth_filtered(max_depth=args.max_depth, max_breadth=args.max_breadth)
+    except Exception as e:
+        raise
     try:
         uniq_learnings = len(set(research_data.get('learnings', [])))
         uniq_urls = len(set(research_data.get('visited_urls', [])))

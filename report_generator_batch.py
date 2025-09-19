@@ -61,17 +61,43 @@ async def process_one(progress_path: str, args, out_lock: asyncio.Lock, semaphor
             print(f"Skipping (output already exists): {out_path}")
             return None
 
-        generator = ReportGenerator(progress_path, args.config, root_id=args.root_id)
+        generator = ReportGenerator(progress_path, args.config, root_id=args.root_id, random_seed=args.random_seed)
         stats = generator.get_tree_summary()
         print(f"Progress tree -> root_id: {stats['root_id']}, nodes: {stats['nodes']}, edges: {stats['edges']}, max_depth: {stats['max_depth']}")
+        # ASCII summary before filtering
+        try:
+            generator.print_ascii_tree_all(max_depth=args.max_depth)
+        except Exception:
+            pass
+        # Verify breadth distribution per level
+        try:
+            verification = generator.verify_breadth(max_depth=args.max_depth)
+            lv_summ = ", ".join([f"L{lv['level']}: {lv['actual']} (exp {lv['expected']}{'' if lv['ok'] else '!)'})" for lv in verification.get('levels', [])])
+            print(f"Breadth by level -> {lv_summ}")
+        except Exception:
+            pass
 
-        research_data = generator.compile_data(max_depth=args.max_depth, ordering=args.ordering)
-        if args.max_depth is not None:
-            try:
-                eligible = len(generator._eligible_node_ids(args.max_depth))
-                print(f"Selected nodes with max_depth={args.max_depth}: {eligible}")
-            except Exception:
-                pass
+        if args.max_breadth is not None:
+            print(f"Applying max_breadth={args.max_breadth}")
+        research_data = generator.compile_data(max_depth=args.max_depth, ordering=args.ordering, max_breadth=args.max_breadth)
+        # ASCII summary after filtering (depth/breadth)
+        try:
+            generator.print_ascii_tree_filtered(max_depth=args.max_depth, max_breadth=args.max_breadth)
+        except Exception:
+            pass
+        # Verification after filtering
+        try:
+            generator.print_verify_breadth_filtered(max_depth=args.max_depth, max_breadth=args.max_breadth)
+        except Exception:
+            pass
+        # Verify breadth distribution per level
+        try:
+            verification = generator.verify_breadth(max_depth=args.max_depth)
+            lv_summ = ", ".join([f"L{lv['level']}: {lv['actual']} (exp {lv['expected']}{'' if lv['ok'] else '!)'})" for lv in verification.get('levels', [])])
+            print(f"Breadth by level -> {lv_summ}")
+        except Exception:
+            pass
+        
         try:
             uniq_learnings = len(set(research_data.get('learnings', [])))
             uniq_urls = len(set(research_data.get('visited_urls', [])))
@@ -98,12 +124,15 @@ async def main_async():
                         choices=['start_time_asc','start_time_desc','end_time_asc','end_time_desc','dfs','bfs','random'],
                         help='Ordering strategy for node aggregation.')
     parser.add_argument('--root_id', type=str, default=None, help='Override root node id if not auto-detected.')
+    parser.add_argument('--max_breadth', type=int, default=None, help='Limit breadth per level via sampling (level1=B, level2=max(2,B//2) per parent, etc.).')
     parser.add_argument('--concurrency', type=int, default=16, help='Maximum number of reports to generate concurrently.')
+    parser.add_argument('--random_seed', type=int, default=42, help='Random seed for deterministic sampling and ordering.')
 
     args = parser.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
     progress_files = find_progress_files(args.logs_root)
+    progress_files = progress_files
     print(f"Found {len(progress_files)} progress.json files under {args.logs_root}")
 
     if not progress_files:
