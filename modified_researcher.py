@@ -51,12 +51,13 @@ class ResearchConductor:
                 node_id=self._get_next_node_id()
             )
 
-        await stream_output(
-            "logs",
-            "planning_research",
-            f"🌐 Browsing the web to learn more about the task: {query}...",
-            self.researcher.websocket,
-        )
+        if self.researcher.verbose:
+            await stream_output(
+                "logs",
+                "planning_research",
+                f"🌐 Browsing the web to learn more about the task: {query}...",
+                self.researcher.websocket,
+            )
 
         self.logger.debug(f"[ResearchConductor] Getting initial search results for planning")
         # NOTE: Use vector store if report_source is LangChainVectorStore for initial planning
@@ -74,12 +75,13 @@ class ResearchConductor:
             self.logger.error(f"[ResearchConductor] Error obtaining search results for query {query}: {e}")
             search_results = []
 
-        await stream_output(
-            "logs",
-            "planning_research",
-            f"🤔 Planning the research strategy and subtasks...",
-            self.researcher.websocket,
-        )
+        if self.researcher.verbose:
+            await stream_output(
+                "logs",
+                "planning_research",
+                f"🤔 Planning the research strategy and subtasks...",
+                self.researcher.websocket,
+            )
 
         self.logger.debug(f"[ResearchConductor] Planning research outline")
         outline = await plan_research_outline(

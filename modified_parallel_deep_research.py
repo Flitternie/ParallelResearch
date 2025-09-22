@@ -11,7 +11,7 @@ from modified_deep_research import TaskState, DeepResearch
 from modified_agent import GPTResearcher
 from gpt_researcher.utils.enum import ReportType, ReportSource, Tone
 
-from build_vector_db import load_vector_db
+from vector_db.build_vector_db import load_vector_db
 from utils import ResearchProgress, trim_context_to_word_limit
 
 logger = logging.getLogger(__name__)

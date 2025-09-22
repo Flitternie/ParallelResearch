@@ -184,8 +184,8 @@ def run_single_process(args: Tuple[str, str, str, str, int, float | None, int, f
             from recursive_deep_research import RecursiveDeepResearch as DeepResearch
         elif version == "runtime":
             from flash_research_runtime import FlashResearchRuntime as DeepResearch
-        else:
-            from modified_deep_research import DeepResearch  # default fallback
+        elif version == "adaptive":
+            from flash_research_adaptive import FlashResearchRuntime as DeepResearch
         
         # Run the async function with retry-on-timeout
         last_error = ""
@@ -380,7 +380,7 @@ if __name__ == "__main__":
                        help="Number of attempts per run on timeout (default: 3)")
     parser.add_argument("--retry-delay", type=float, default=1.0,
                        help="Seconds to wait before retrying after a timeout (default: 1.0)")
-    parser.add_argument("--version", type=str, choices=["baseline", "parallel", "runtime"],
+    parser.add_argument("--version", type=str, choices=["baseline", "parallel", "runtime", "adaptive"],
                        help="Version of the research model to use")
 
     args = parser.parse_args()

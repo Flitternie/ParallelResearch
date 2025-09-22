@@ -18,7 +18,7 @@ from gpt_researcher.utils.llm import create_chat_completion
 from gpt_researcher.utils.enum import ReportType, ReportSource, Tone
 from gpt_researcher.actions.query_processing import get_search_results
 
-from build_vector_db import load_vector_db
+from vector_db.build_vector_db import load_vector_db
 from utils import Config, ResearchLogger, ResearchProgress, trim_context_to_word_limit
 
 # NOTE: This is a modified version from gpt_researcher.skills.deep_research
@@ -192,7 +192,8 @@ Format each question on a new line starting with 'Question: '"""}
             temperature=0.0,
             max_tokens=500,
             reasoning_effort=ReasoningEfforts.High.value,
-            seed=42
+            seed=42,
+            usage_tag="research"
         )
 
         # Parse questions from response
@@ -227,7 +228,8 @@ Format each question on a new line starting with 'Question: '"""}
             reasoning_effort=ReasoningEfforts.High.value,
             max_tokens=1000,
             seed=42,
-            response_format=SerpQueriesResponse  # Use structured output
+            response_format=SerpQueriesResponse,  # Use structured output
+            usage_tag="research"
         )
 
         # convert response to structured format
@@ -260,7 +262,8 @@ Format each question on a new line starting with 'Question: '"""}
             temperature=0.0,
             max_tokens=1000,
             reasoning_effort=ReasoningEfforts.High.value,
-            seed=42
+            seed=42,
+            usage_tag="research"
         )
 
         # Parse learnings and questions with citations
@@ -716,6 +719,7 @@ Format each question on a new line starting with 'Question: '"""}
         try:
             # Use global token tracker
             per_model = TokenTracker.get_per_model_totals()
+            per_usage = TokenTracker.get_per_usage_totals()
             totals = TokenTracker.get_totals()
             token_counts = per_model
             summary_lines = [
@@ -737,6 +741,18 @@ Format each question on a new line starting with 'Question: '"""}
                 summary_lines.append(f"    Output tokens: {output_t:,}")
                 summary_lines.append(f"    Total tokens:  {total_t:,}")
                 summary_lines.append(f"    Cost:          ${cost_v:.4f}")
+            summary_lines.append("")
+            summary_lines.append("Per-Usage Breakdown:")
+            for usage_tag, stats in per_usage.items():
+                input_t = int(stats.get("input", 0))
+                output_t = int(stats.get("output", 0))
+                cost_v = float(stats.get("cost", 0.0))
+                total_t = input_t + output_t
+                summary_lines.append(f"  {usage_tag}:")
+                summary_lines.append(f"    Input tokens:  {input_t:,}")
+                summary_lines.append(f"    Output tokens: {output_t:,}")
+                summary_lines.append(f"    Total tokens:  {total_t:,}")
+                summary_lines.append(f"    Cost:          ${cost_v:.4f}")
             token_summary = "\n".join(summary_lines)
             
             # Save to logs directory
@@ -746,6 +762,7 @@ Format each question on a new line starting with 'Question: '"""}
             with open(token_usage_path, "w") as f:
                 json.dump({
                     "token_counts_by_model": token_counts,
+                    "token_counts_by_usage": per_usage,
                     "total_cost": totals.get("cost", 0.0),
                     "execution_time": str(execution_time),
                     "summary": token_summary

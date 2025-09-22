@@ -20,6 +20,79 @@ from utils import Config, ResearchLogger, ResearchProgress, trim_context_to_word
 logger = logging.getLogger(__name__)
 
 
+class ResearchQuery(BaseModel):
+    query: str
+    researchGoal: str
+
+class BreadthPlanningDecision(BaseModel):
+    """Structured decision for breadth planning (number of subqueries)"""
+    num_subqueries: int
+    subqueries: List[ResearchQuery]  # List of generated subqueries
+    reasoning: str
+
+
+class AgenticPlanner:
+    """Agent-based task planner that dynamically determines research breadth and depth"""
+
+    def __init__(self, config: Config, user_query: str):
+        self.config = config
+        self.user_query = user_query
+        self.existing_queries: List[str] = []
+        self._existing_queries_lock = asyncio.Lock()
+
+    async def get_existing_queries_snapshot(self) -> List[str]:
+        async with self._existing_queries_lock:
+            return list(self.existing_queries)
+
+    async def add_existing_queries(self, queries: List[str]):
+        async with self._existing_queries_lock:
+            for q in queries:
+                if q not in self.existing_queries:
+                    self.existing_queries.append(q)
+
+    async def plan_breadth(self, query: str, max_breadth: int) -> int:
+        """Determine the number of subqueries (breadth) for the current level"""
+
+        existing_queries = await self.get_existing_queries_snapshot()
+        
+        messages = [
+            {"role": "system", "content": f"""You are an expert researcher generating search queries. Your task is to generate determine the OPTIMAL number of clear, non-overlapping search queries. 
+EFFICIENCY IS CRITICAL: More subqueries do not necessarily lead to better research. Minimize waste and redundancy. Highly specific queries need less subqueries. Broad topics may need more.
+
+SUBQUERY REQUIREMENTS:
+- Do not exceed {max_breadth+2} subqueries
+- Keep queries clear and concise 
+- Make each subquery targets a DISTINCT aspect
+- Avoid near-duplicates and trivial variants
+- Prefer fewer subqueries if coverage is maintained
+- Ensure queries are relevant to the high-level research goal: {self.user_query}
+- Exclude overlap with existing queries:
+{"\n".join(existing_queries) if existing_queries else "None"}
+"""},
+            {"role": "user", "content": f"""Research query: {query}
+Return the minimum set of clear, non-overlapping subqueries that cover the goal. """}
+        ]
+        
+        response = await create_chat_completion(
+            messages=messages,
+            llm_provider=self.config.llm_provider,
+            model=self.config.standard_model,  
+            # NOTE: temperature set to 0 for reproducibility
+            temperature=0.0,
+            reasoning_effort=ReasoningEfforts.High.value,
+            max_tokens=1000,
+            seed=42,
+            response_format=BreadthPlanningDecision  # Use structured output
+        )
+        
+        if isinstance(response, str):
+            response = BreadthPlanningDecision.model_validate_json(response)
+            # Make sure the number of subqueries is within the allowed range
+            response.subqueries = response.subqueries[:max_breadth+2]
+        return response
+
+
+
 class NodeResults(BaseNodeResults):
     """Extended NodeResults with runtime monitoring data"""
     def __init__(self, node_id: int):
@@ -301,6 +374,26 @@ class FlashResearchRuntime(RecursiveDeepResearch):
         self.task_manager = AsyncTaskManager(self.logger)
         self.progress_tracker = AsyncProgress(depth, self.config.max_breadth)
 
+        self.task_planner = AgenticPlanner(config=self.config, user_query=query)
+
+    async def plan_serp_queries(self, query: str, max_breadth: int) -> List[Dict[str, str]]:
+        """Generate SERP queries for research"""
+
+        response = await self.task_planner.plan_breadth(
+            query=query,
+            max_breadth=max_breadth
+        )
+        logger.debug(f"[FlashResearch] Task planner determined breadth: {len(response.subqueries)}")
+        # With structured output, response is already parsed
+        queries = [{"query": q.query, "researchGoal": q.researchGoal} for q in response.subqueries]
+
+        try:
+            await self.task_planner.add_existing_queries([q["query"] for q in queries])
+        except Exception:
+            logger.error(f"[FlashResearch] Failed to add existing queries to task planner: {str(e)}")
+        
+        return queries
+
     async def deep_research(
         self,
         query: str,
@@ -487,7 +580,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                         await self.task_manager.register_node(recursive_planning_node_id, current_node_id)
                         
                         # Generate sub-queries (NOTE: Controlled by BREADTH)
-                        sub_queries = await self.generate_serp_queries(query=next_query, num_queries=new_breadth)
+                        sub_queries = await self.plan_serp_queries(next_query, max_breadth=new_breadth)
 
                         logger.debug(f"[FlashResearch] Generated {len(sub_queries)} recursive queries for depth {new_depth}")
                         
@@ -591,7 +684,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                 self.task_manager.tasks[current_node_id] = current_task
                 
             # Generate initial queries (NOTE: Controlled by BREADTH)
-            serp_queries = await self.generate_serp_queries(query=query, num_queries=breadth)
+            serp_queries = await self.plan_serp_queries(query, max_breadth=breadth)
             logger.debug(f"[FlashResearch] Generated {len(serp_queries)} initial queries")
             
             # Create and launch initial async tasks with proper task management

@@ -109,7 +109,7 @@ class GPTResearcher:
         parent_query: str = "",
         subtopics: list | None = None,
         visited_urls: set | None = None,
-        verbose: bool = True,
+        verbose: bool = False,
         context=None,
         headers: dict | None = None,
         max_subtopics: int = 5,

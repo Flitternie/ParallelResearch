@@ -12,6 +12,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 
+# Progress bar
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
+
 
 # -------------------------
 # Types
@@ -226,7 +232,7 @@ def main() -> None:
     parser.add_argument("--config", dest="config", default="./config.json", help="Path to config.json file")
     parser.add_argument("--output_dir", dest="output_dir", help="Base output directory")
     parser.add_argument("--model_name", dest="model_name", required=True, help="Model name used for output filename and logs directory")
-    parser.add_argument("--workers", type=int, default=4, help="Number of worker processes")
+    parser.add_argument("--workers", type=int, default=16, help="Number of worker processes")
     parser.add_argument("--timeout", type=int, default=3600, help="Per-task timeout in seconds; 0 disables timeout")
     parser.add_argument("--retries", type=int, default=3, help="Retries on timeout per task")
     parser.add_argument("--retry_delay", type=float, default=1.0, help="Delay between retries in seconds")
@@ -300,6 +306,11 @@ def main() -> None:
 
     # Open output file in append mode once
     ensure_parent_dir(output_file)
+
+    total_tasks = len(tasks)
+    use_tqdm = tqdm is not None and total_tasks > 0
+    progress_bar = tqdm(total=total_tasks, desc="Processing tasks", unit="task") if use_tqdm else None
+
     with open(output_file, 'a', encoding='utf-8') as outf:
         ctx = mp.get_context("spawn")
         with ctx.Pool(processes=num_processes, maxtasksperchild=1) as pool:
@@ -316,9 +327,12 @@ def main() -> None:
                     completed += 1
                 else:
                     failed += 1
-                # Lightweight progress feedback
-                if (completed + failed) % 5 == 0:
-                    print(f"Progress: done={completed}, failed={failed}, total={completed+failed}/{len(tasks)}")
+                if progress_bar:
+                    progress_bar.update(1)
+                elif (completed + failed) % 5 == 0:
+                    print(f"Progress: done={completed}, failed={failed}, total={completed+failed}/{total_tasks}")
+    if progress_bar:
+        progress_bar.close()
 
     total_time = time.time() - start_time
     print("=== RUN COMPLETE ===")
