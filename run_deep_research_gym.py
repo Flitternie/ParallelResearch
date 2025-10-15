@@ -360,7 +360,7 @@ def save_run_configuration(output_dir: str, args, question_files: List[str]):
 
     try:
         with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(snapshot, f, indent=2, ensure_ascii=False)
+            json.dump(snapshot, f, ensure_ascii=False)
     except Exception as e:
         logging.error(f"Failed to write run configuration snapshot: {e}")
 

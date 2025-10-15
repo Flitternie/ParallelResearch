@@ -121,7 +121,7 @@ class AsyncTaskManager:
         async with self._lock:
             if node_id in self.node_results:
                 node = self.node_results[node_id]
-                annotated_learning = f"{learning} [Node: {node_id}]"
+                annotated_learning = f"{learning}" #  [Node: {node_id}]
                 node.learnings.append(annotated_learning)
                 # Propagate to parent
                 await self._propagate_to_parent(node_id, 'learning', annotated_learning)
@@ -132,7 +132,7 @@ class AsyncTaskManager:
             if node_id in self.node_results:
                 node = self.node_results[node_id]
                 for learning in learnings:
-                    annotated_learning = f"{learning} [Node: {node_id}]"
+                    annotated_learning = f"{learning}" #  [Node: {node_id}]
                     node.learnings.append(annotated_learning)
                     # Propagate to parent
                     await self._propagate_to_parent(node_id, 'learning', annotated_learning)
@@ -142,8 +142,8 @@ class AsyncTaskManager:
         async with self._lock:
             if node_id in self.node_results:
                 node = self.node_results[node_id]
-                annotated_learning = f"{learning} [Node: {node_id}]"
-                annotated_citation = f"{citation} [Node: {node_id}]"
+                annotated_learning = f"{learning}" #  [Node: {node_id}]
+                annotated_citation = f"{citation}" #  [Node: {node_id}]
                 node.citations[annotated_learning] = annotated_citation
                 # Propagate to parent
                 await self._propagate_to_parent(node_id, 'citation', (annotated_learning, annotated_citation))
@@ -154,8 +154,8 @@ class AsyncTaskManager:
             if node_id in self.node_results:
                 node = self.node_results[node_id]
                 for learning, citation in citations.items():
-                    annotated_learning = f"{learning} [Node: {node_id}]"
-                    annotated_citation = f"{citation} [Node: {node_id}]"
+                    annotated_learning = f"{learning}" #  [Node: {node_id}]
+                    annotated_citation = f"{citation}" #  [Node: {node_id}]
                     node.citations[annotated_learning] = annotated_citation
                     # Propagate to parent
                     await self._propagate_to_parent(node_id, 'citation', (annotated_learning, annotated_citation))
@@ -166,7 +166,7 @@ class AsyncTaskManager:
             if node_id in self.node_results:
                 node = self.node_results[node_id]
                 for url in urls:
-                    annotated_url = f"{url} [Node: {node_id}]"
+                    annotated_url = f"{url}" #  [Node: {node_id}]
                     node.visited_urls.add(annotated_url)
                     # Propagate to parent
                     await self._propagate_to_parent(node_id, 'visited_url', annotated_url)
@@ -176,7 +176,7 @@ class AsyncTaskManager:
         async with self._lock:
             if node_id in self.node_results:
                 node = self.node_results[node_id]
-                annotated_context = f"{context} [Node: {node_id}]"
+                annotated_context = f"{context}" #  [Node: {node_id}]
                 node.context.append(annotated_context)
                 # Propagate to parent
                 await self._propagate_to_parent(node_id, 'context', annotated_context)
@@ -187,7 +187,7 @@ class AsyncTaskManager:
             if node_id in self.node_results:
                 node = self.node_results[node_id]
                 for source in sources:
-                    annotated_source = f"{source} [Node: {node_id}]"
+                    annotated_source = f"{source}" #  [Node: {node_id}]
                     node.sources.append(annotated_source)
                     # Propagate to parent
                     await self._propagate_to_parent(node_id, 'source', annotated_source)
@@ -447,6 +447,18 @@ class RecursiveDeepResearch(DeepResearch):
                         'sources': sources if sources else []
                     }
                     
+                    # Immediately log completion with learnings/citations to ensure persistence
+                    self.logger.update_node(
+                        node_id=current_node_id,
+                        status=TaskState.COMPLETED.value,
+                        results={
+                            'learnings': results['learnings'],
+                            'citations': results['citations']
+                        },
+                        visited_urls=visited,
+                        end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    )
+                    
                     # Add direct results to task manager with node tracking
                     await self.task_manager.add_direct_learnings(current_node_id, results['learnings'])
                     await self.task_manager.add_direct_citations(current_node_id, results['citations'])
@@ -455,6 +467,22 @@ class RecursiveDeepResearch(DeepResearch):
                         await self.task_manager.add_direct_context(current_node_id, context)
                     if sources:
                         await self.task_manager.add_direct_sources(current_node_id, sources)
+                    
+                    # Also aggregate into class-level accumulators for outer run() salvage
+                    try:
+                        async with self._partial_lock:
+                            if results.get('learnings'):
+                                self.learnings.extend(results['learnings'])
+                            if visited:
+                                self.visited_urls.update(visited)
+                            if results.get('citations'):
+                                self.citations.update(results['citations'])
+                            if context:
+                                self.context.append(context)
+                            if sources:
+                                self.research_sources.extend(sources)
+                    except Exception:
+                        pass
                     
                     # Mark task as completed with proper task management
                     await self.task_manager.complete_task(task_id, result)
@@ -533,6 +561,22 @@ class RecursiveDeepResearch(DeepResearch):
                             await self.task_manager.add_direct_context(current_node_id, ctx)
                         if salvage.get("sources"):
                             await self.task_manager.add_direct_sources(current_node_id, salvage["sources"]) 
+                        # Best-effort: flush any accumulated results to the node before exiting
+                        try:
+                            node_results = await self.task_manager.get_node_results(current_node_id)
+                            if node_results:
+                                self.logger.update_node(
+                                    node_id=current_node_id,
+                                    status=TaskState.CANCELLED.value,
+                                    results={
+                                        'learnings': node_results.get('learnings', []),
+                                        'citations': node_results.get('citations', {})
+                                    },
+                                    visited_urls=node_results.get('visited_urls', []),
+                                    end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                )
+                        except Exception:
+                            pass
                     except Exception as salvage_err:
                         logger.error(f"[Recursive DeepResearch] Salvage on cancellation failed: {salvage_err}")
                     query_task.state = TaskState.CANCELLED
@@ -554,6 +598,22 @@ class RecursiveDeepResearch(DeepResearch):
                             await self.task_manager.add_direct_context(current_node_id, ctx)
                         if salvage.get("sources"):
                             await self.task_manager.add_direct_sources(current_node_id, salvage["sources"]) 
+                        # Best-effort: flush any accumulated results to the node before exiting
+                        try:
+                            node_results = await self.task_manager.get_node_results(current_node_id)
+                            if node_results:
+                                self.logger.update_node(
+                                    node_id=current_node_id,
+                                    status=TaskState.FAILED.value,
+                                    results={
+                                        'learnings': node_results.get('learnings', []),
+                                        'citations': node_results.get('citations', {})
+                                    },
+                                    visited_urls=node_results.get('visited_urls', []),
+                                    end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                )
+                        except Exception:
+                            pass
                     except Exception as salvage_err:
                         logger.error(f"[Recursive DeepResearch] Salvage on error failed: {salvage_err}")
                     query_task.state = TaskState.FAILED
@@ -609,10 +669,27 @@ class RecursiveDeepResearch(DeepResearch):
             # Get final results
             final_data = await self.task_manager.get_all_data()
             
+            # Aggregate final_data into class-level accumulators as a backup
+            try:
+                async with self._partial_lock:
+                    if final_data.get('learnings'):
+                        self.learnings.extend(final_data['learnings'])
+                    if final_data.get('visited_urls'):
+                        self.visited_urls.update(set(final_data['visited_urls']))
+                    if final_data.get('citations'):
+                        self.citations.update(final_data['citations'])
+                    if final_data.get('context'):
+                        self.context.extend(final_data['context'])
+                    if final_data.get('sources'):
+                        self.research_sources.extend(final_data['sources'])
+            except Exception:
+                pass
+            
+            # NOTE: Context trimming is disabled for now
             # Trim context to stay within word limits
-            trimmed_context = trim_context_to_word_limit(final_data['context'], max_words=self.max_context_words)
-            logger.info(f"Trimmed context from {len(final_data['context'])} items to {len(trimmed_context)} items")
-            final_data['context'] = trimmed_context
+            # trimmed_context = trim_context_to_word_limit(final_data['context'], max_words=self.max_context_words)
+            # logger.info(f"Trimmed context from {len(final_data['context'])} items to {len(trimmed_context)} items")
+            # final_data['context'] = trimmed_context
 
         # Get node results (now merged with node annotations)
         node_results = await self.task_manager.get_node_results(current_node_id)

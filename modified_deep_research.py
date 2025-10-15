@@ -449,6 +449,22 @@ Format each question on a new line starting with 'Question: '"""}
 
                     logger.debug(f"[DeepResearch] Successfully completed process_query for: {serp_query['query']}")
 
+                    # Also aggregate into class-level accumulators for outer run() salvage
+                    try:
+                        async with self._partial_lock:
+                            if results.get('learnings'):
+                                self.learnings.extend(results['learnings'])
+                            if visited:
+                                self.visited_urls.update(visited)
+                            if results.get('citations'):
+                                self.citations.update(results['citations'])
+                            if context:
+                                self.context.append(context)
+                            if sources:
+                                self.research_sources.extend(sources)
+                    except Exception:
+                        pass
+
                     return {
                         'node_id': query_node_id,
                         'learnings': results['learnings'],
@@ -549,8 +565,8 @@ Format each question on a new line starting with 'Question: '"""}
                     parent_node_id=node_id  # Pass the research node id as the parent
                 )
 
-                all_learnings = deeper_results['learnings']
-                all_visited_urls = set(deeper_results['visited_urls'])
+                all_learnings = list(set(all_learnings + deeper_results['learnings']))
+                all_visited_urls.update(deeper_results['visited_urls'])
                 all_citations.update(deeper_results['citations'])
                 if deeper_results.get('context'):
                     all_context.extend(deeper_results['context'])
@@ -562,10 +578,21 @@ Format each question on a new line starting with 'Question: '"""}
         # Update class tracking
         self.context.extend(all_context)
         self.research_sources.extend(all_sources)
+        # Also aggregate learnings/visited/citations for timeout salvage in run()
+        try:
+            async with self._partial_lock:
+                if all_learnings:
+                    self.learnings.extend(all_learnings)
+                if all_visited_urls:
+                    self.visited_urls.update(all_visited_urls)
+                if all_citations:
+                    self.citations.update(all_citations)
+        except Exception:
+            pass
 
         # Trim context to stay within word limits
-        trimmed_context = trim_context_to_word_limit(all_context, max_words=self.max_context_words)
-        logger.info(f"Trimmed context from {len(all_context)} items to {len(trimmed_context)} items to stay within word limit")
+        # trimmed_context = trim_context_to_word_limit(all_context, max_words=self.max_context_words)
+        # logger.info(f"Trimmed context from {len(all_context)} items to {len(trimmed_context)} items to stay within word limit")
 
         # Log the completion of this research level
         self.logger.update_node(
@@ -585,7 +612,7 @@ Format each question on a new line starting with 'Question: '"""}
             'learnings': list(set(all_learnings)),
             'visited_urls': list(all_visited_urls),
             'citations': all_citations,
-            'context': trimmed_context,
+            'context': all_context,
             'sources': all_sources
         }
 
@@ -677,11 +704,11 @@ Format each question on a new line starting with 'Question: '"""}
                 context_with_citations.append(learning)
 
         # Add all research context
-        if results.get('context'):
-            context_with_citations.extend(results['context'])
+        # if results.get('context'):
+        #     context_with_citations.extend(results['context'])
 
         # Trim final context to word limit
-        context_with_citations = trim_context_to_word_limit(context_with_citations, max_words=self.max_context_words)
+        # context_with_citations = trim_context_to_word_limit(context_with_citations, max_words=self.max_context_words)
         
         # Set enhanced context and visited URLs
         self.researcher.context = """"""

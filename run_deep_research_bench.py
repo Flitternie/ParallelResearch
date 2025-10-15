@@ -130,8 +130,8 @@ def run_task_worker(args: Tuple[Task, str, str, float, int, float, str]) -> Task
             from recursive_deep_research import RecursiveDeepResearch as DeepResearch
         elif version == "runtime":
             from flash_research_runtime import FlashResearchRuntime as DeepResearch
-        else:
-            from modified_deep_research import DeepResearch  # default
+        elif version == "adaptive":
+            from flash_research_adaptive import FlashResearchRuntime as DeepResearch
 
         last_error = ""
         for attempt in range(1, max(1, int(retries)) + 1):
@@ -236,7 +236,7 @@ def main() -> None:
     parser.add_argument("--timeout", type=int, default=3600, help="Per-task timeout in seconds; 0 disables timeout")
     parser.add_argument("--retries", type=int, default=3, help="Retries on timeout per task")
     parser.add_argument("--retry_delay", type=float, default=1.0, help="Delay between retries in seconds")
-    parser.add_argument("--version", type=str, choices=["baseline", "parallel", "runtime"], help="DeepResearch implementation version to use")
+    parser.add_argument("--version", type=str, choices=["baseline", "parallel", "runtime", "adaptive"], help="DeepResearch implementation version to use")
     parser.add_argument("--language", type=str, default="en", choices=["en", "zh"], help="Filter tasks by language (default: en)")
     args = parser.parse_args()
 
@@ -321,7 +321,7 @@ def main() -> None:
                         "prompt": result.prompt,
                         "article": result.article,
                     }
-                    json_line = json.dumps(record, ensure_ascii=False, indent=4)
+                    json_line = json.dumps(record, ensure_ascii=False)
                     outf.write(json_line + "\n")
                     outf.flush()
                     completed += 1
