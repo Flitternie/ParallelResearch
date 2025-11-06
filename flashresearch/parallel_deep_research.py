@@ -5,10 +5,10 @@ import logging
 import time
 from datetime import datetime
 import traceback
-from enum import Enum
 
-from modified_deep_research import TaskState, DeepResearch
-from modified_agent import GPTResearcher
+from flashresearch.deep_research import TaskState, DeepResearch
+from flashresearch.agent import GPTResearcher
+
 from gpt_researcher.utils.enum import ReportType, ReportSource, Tone
 
 from vector_db.build_vector_db import load_vector_db
@@ -201,7 +201,7 @@ class AsyncTaskManager:
 
 
 
-class ParallelizedDeepResearch(DeepResearch):
+class ParallelResearch(DeepResearch):
     def __init__(
         self,
         query: str,
@@ -363,7 +363,8 @@ class ParallelizedDeepResearch(DeepResearch):
                     headers=self.headers,
                     log_handler=self.logger,
                     enable_enhanced_logging=self.enable_enhanced_logging,
-                    parent_node_id=query_node_id
+                    parent_node_id=query_node_id,
+                    verbose=self.verbose
                 )
 
                 # Conduct research with timeout (consistent with other implementations)

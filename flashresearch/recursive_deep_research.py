@@ -2,14 +2,12 @@ from typing import List, Dict, Any, Optional, Set
 from fastapi import WebSocket
 import asyncio
 import logging
-import time
 from datetime import datetime
 import traceback
-from enum import Enum
 
-# NOTE: This is a modified version of the GPTResearcher class
-from modified_deep_research import TaskState, DeepResearch
-from modified_agent import GPTResearcher
+from flashresearch.agent import GPTResearcher
+from flashresearch.deep_research import TaskState, DeepResearch
+
 from gpt_researcher.utils.enum import ReportType, ReportSource, Tone
 
 from vector_db.build_vector_db import load_vector_db
@@ -82,7 +80,6 @@ class AsyncProgress:
             }
 
 
-
 class NodeResults:
     """Represents research results for a single node with merged findings and node annotations"""
     def __init__(self, node_id: int):
@@ -95,6 +92,7 @@ class NodeResults:
         self.sources = []  # Each entry will have format "source [Node: X]"
         # Parent node reference
         self.parent_node_id: Optional[int] = None
+
 
 class AsyncTaskManager:
     """Async-safe task manager for research operations"""
@@ -410,20 +408,12 @@ class RecursiveDeepResearch(DeepResearch):
                         headers=self.headers,
                         log_handler=self.logger,
                         enable_enhanced_logging=self.enable_enhanced_logging,
-                        parent_node_id=current_node_id
+                        parent_node_id=current_node_id,
+                        verbose=self.verbose
                     )
 
-                    # Conduct research with timeout
-                    try:
-                        # Use configured timeout or default to 300 seconds
-                        research_timeout = getattr(self.config, "individual_research_timeout", 300)
-                        await asyncio.wait_for(
-                            researcher.conduct_research(),
-                            timeout=research_timeout
-                        )
-                    except asyncio.TimeoutError:
-                        logger.error(f"[DeepResearch] Research timed out after {research_timeout}s for query: {query[:100]}...")
-                        raise asyncio.TimeoutError(f"Research timed out for query: {query[:100]}...")
+                    # Conduct research (no individual timeout - only global timeout applies)
+                    await researcher.conduct_research()
                     
                     # Process results
                     context = researcher.context
@@ -685,11 +675,10 @@ class RecursiveDeepResearch(DeepResearch):
             except Exception:
                 pass
             
-            # NOTE: Context trimming is disabled for now
             # Trim context to stay within word limits
-            # trimmed_context = trim_context_to_word_limit(final_data['context'], max_words=self.max_context_words)
-            # logger.info(f"Trimmed context from {len(final_data['context'])} items to {len(trimmed_context)} items")
-            # final_data['context'] = trimmed_context
+            trimmed_context = trim_context_to_word_limit(final_data['context'], max_words=self.max_context_words)
+            logger.info(f"Trimmed context from {len(final_data['context'])} items to {len(trimmed_context)} items")
+            final_data['context'] = trimmed_context
 
         # Get node results (now merged with node annotations)
         node_results = await self.task_manager.get_node_results(current_node_id)

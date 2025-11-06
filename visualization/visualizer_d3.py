@@ -4,7 +4,7 @@ from datetime import datetime
 import re
 from dataclasses import dataclass, field
 
-from research_visualizer import BaseResearchVisualizer
+from visualization.visualizer import BaseResearchVisualizer
 
 @dataclass
 class VisualizationConfigD3:
@@ -27,8 +27,8 @@ class VisualizationConfigD3:
     edge_hover_opacity: float = 1.0
     
     # Tree layout settings
-    node_size_x: int = 80
-    node_size_y: int = 120
+    node_size_x: int = 70  # Reduced spacing
+    node_size_y: int = 100  # Reduced spacing
     
     # Animation settings
     animation_duration: int = 750
@@ -44,7 +44,7 @@ class VisualizationConfigD3:
         "completed": "#90EE90",
         "error": "#F08080",
         "default": "#D3D3D3",
-        "terminated": "#FF8706",  # Orange for terminated research
+        "terminated": "#FF0000",  # Orange for terminated research
         "cancelled": "#FFBF00",  # Yellow for cancelled research
     })
     
@@ -156,6 +156,13 @@ class HTMLTemplatesD3:
             border-radius: 4px;
             box-shadow: 0 2px 5px rgba(0,0,0,0.2);
             padding: 5px;
+        }}
+        .query-boxes text {{
+            user-select: text;
+            cursor: text;
+        }}
+        .query-boxes rect {{
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1));
         }}
         .zoom-btn {{
             display: block;
@@ -322,6 +329,8 @@ class ResearchVisualizer(BaseResearchVisualizer):
         const internalNodeGroups = new Map(); // Store internal node group references
         // Store internal node links
         const internalLinkGroups = new Map();
+        // Will store query boxes reference
+        let queryBoxes = null;
 
         // Setup SVG
         const svg = d3.select("#visualization")
@@ -422,10 +431,11 @@ class ResearchVisualizer(BaseResearchVisualizer):
         // Build the tree data
         const treeData = buildHierarchy(graphData.nodes, graphData.links);
         
-        // Create tree layout
+        // Create tree layout with separation function for better balance
         const treeLayout = d3.tree()
             .size([config.width - 100, config.height - 100])
-            .nodeSize([config.nodeSizeX, config.nodeSizeY]);
+            .nodeSize([config.nodeSizeX * 1.5, config.nodeSizeY * 1.2])
+            .separation((a, b) => a.parent === b.parent ? 1.2 : 1.5);
 
         // Create hierarchy and apply initial tree layout
         const root = d3.hierarchy(treeData);
@@ -459,78 +469,16 @@ class ResearchVisualizer(BaseResearchVisualizer):
         
         svg.call(zoom.transform, initialTransform);
 
-        // Create force simulation
-        const simulation = d3.forceSimulation(root.descendants())
-            .force("link", d3.forceLink(root.links())
-                .id(d => d.data.id)
-                .distance(d => {{
-                    // Increase distance for expanded nodes
-                    const sourceExpanded = expandedNodes.has(d.source.data.id);
-                    const targetExpanded = expandedNodes.has(d.target.data.id);
-                    const baseDistance = config.nodeSizeY * 1.5; // Increased base distance
-                    return baseDistance * (sourceExpanded || targetExpanded ? 3 : 1.5); // Increased multiplier
-                }})
-                .strength(0.7)) // Increased strength to maintain structure
-            .force("charge", d3.forceManyBody()
-                .strength(d => {{
-                    // Much stronger repulsion for expanded nodes
-                    return expandedNodes.has(d.data.id) ? -2000 : -1000;
-                }}))
-            .force("collide", d3.forceCollide()
-                .radius(d => {{
-                    // Larger collision radius for expanded nodes
-                    if (expandedNodes.has(d.data.id)) {{
-                        const internalNodeCount = d.data.internal_nodes.length;
-                        // Increased base radius and multiplier
-                        return Math.max(80, internalNodeCount * 15);
-                    }}
-                    return config.nodeRadius * 2; // Increased base collision radius
-                }})
-                .strength(1)) // Maximum collision strength
-            .force("x", d3.forceX(d => {{
-                // Keep nodes near their tree layout x position
-                return d.x;
-            }}).strength(0.5)) // Increased x-positioning force
-            .force("y", d3.forceY(d => {{
-                // Keep nodes near their tree layout y position
-                return d.y;
-            }}).strength(0.5)) // Increased y-positioning force
-            .on("tick", ticked);
+        // Create force simulation - disabled for static tree layout
+        // We'll use pure tree layout for cleaner, more balanced appearance
+        const simulation = null; // Removed force simulation for cleaner tree structure
 
-        function ticked() {{
-            // Update link positions
-            link.attr("d", d3.linkVertical()
-                .x(d => d.x)
-                .y(d => d.y));
+        // Since we're not using simulation, we don't need ticked function
+        // Positions are set directly from tree layout
 
-            // Update node positions
-            node.attr("transform", d => `translate(${{d.x}}, ${{d.y}})`);
+        // No simulation to reheat - tree layout is static
 
-            // Update labels
-            label.attr("x", d => d.x)
-                .attr("y", d => d.y + (d.data.has_internal_nodes && expandedNodes.has(d.data.id) ? 60 : config.nodeRadius + 15));
-
-            // Update expansion indicators
-            g.selectAll(".expansion-indicators text")
-                .attr("x", d => d.x + config.nodeRadius * 0.8)
-                .attr("y", d => d.y - config.nodeRadius * 0.8);
-
-            // Update internal nodes if they exist - container follows parent node
-            internalNodeGroups.forEach((internalNodeGroup, parentId) => {{
-                const parentNode = root.descendants().find(d => d.data.id == parentId);
-                if (parentNode && expandedNodes.has(parentId)) {{
-                    // Update container position to follow parent node
-                    internalNodeGroup.attr("transform", `translate(${{parentNode.x}}, ${{parentNode.y}})`);
-                }}
-            }});
-        }}
-
-        // Reheat simulation when nodes are expanded/collapsed
-        function reheatSimulation() {{
-            simulation.alpha(0.3).restart();
-        }}
-
-        // Create links
+        // Create links with elbow connector for cleaner appearance
         const link = g.append("g")
             .attr("stroke", "#999")
             .attr("stroke-opacity", config.edgeOpacity)
@@ -539,9 +487,15 @@ class ResearchVisualizer(BaseResearchVisualizer):
             .selectAll("path")
             .data(root.links())
             .join("path")
-            .attr("d", d3.linkVertical()
-                .x(function(d) {{ return d.x; }})
-                .y(function(d) {{ return d.y; }}))
+            .attr("d", d => {{
+                // Use elbow connector for cleaner tree appearance
+                const sourceX = d.source.x;
+                const sourceY = d.source.y;
+                const targetX = d.target.x;
+                const targetY = d.target.y;
+                const midY = (sourceY + targetY) / 2;
+                return `M${{sourceX}},${{sourceY}}C${{sourceX}},${{midY}} ${{targetX}},${{midY}} ${{targetX}},${{targetY}}`;
+            }})
             .attr("class", "link");
 
         // Create nodes
@@ -611,6 +565,91 @@ class ResearchVisualizer(BaseResearchVisualizer):
             .style("pointer-events", "none")
             .text(function(d) {{ return d.data.id === "virtual_root" ? "" : d.data.label; }});
 
+        // Add query boxes near nodes (only for research operation nodes)
+        queryBoxes = g.append("g")
+            .attr("class", "query-boxes")
+            .selectAll("g")
+            .data(root.descendants().filter(d => d.data.id !== "virtual_root" && d.data.operation === "research"))
+            .join("g")
+            .attr("transform", d => `translate(${{d.x + config.nodeRadius + 15}}, ${{d.y - 20}})`);
+
+        // Add background rectangles for query boxes (size calculated after text processing)
+        queryBoxes.each(function(d) {{
+            const queryBox = d3.select(this);
+            const query = d.data.query || "";
+            const words = query.split(/\s+/);
+            const maxCharsPerLine = 35;
+            const lineHeight = 14;
+            const captionHeight = 18; // Space for caption
+            const padding = 16; // 8px on each side
+            
+            // Calculate text lines
+            let currentLine = "";
+            let lines = [];
+            
+            words.forEach(word => {{
+                if ((currentLine + " " + word).length > maxCharsPerLine) {{
+                    if (currentLine) {{
+                        lines.push(currentLine);
+                        currentLine = word;
+                    }}
+                }} else {{
+                    currentLine = currentLine ? currentLine + " " + word : word;
+                }}
+            }});
+            if (currentLine) lines.push(currentLine);
+            
+            // Calculate adaptive dimensions
+            const maxLineLength = Math.max(...lines.map(line => line.length), 13); // Min width for "Research Node"
+            const boxWidth = Math.max(120, maxLineLength * 6.5 + padding); // Approx 6.5px per char + padding
+            const boxHeight = Math.max(35, lines.length * lineHeight + captionHeight + 8); // 8px bottom padding
+            
+            // Store dimensions for later use
+            d.boxWidth = boxWidth;
+            d.boxHeight = boxHeight;
+            d.textLines = lines;
+            
+            // Add background rectangle
+            queryBox.append("rect")
+                .attr("x", 0)
+                .attr("y", 0)
+                .attr("width", boxWidth)
+                .attr("height", boxHeight)
+                .attr("rx", 4)
+                .attr("ry", 4)
+                .style("fill", "white")
+                .style("stroke", "#ddd")
+                .style("stroke-width", 1)
+                .style("opacity", 0.95);
+
+            // Add "Research Node" caption at the top of each box
+            queryBox.append("text")
+                .attr("x", boxWidth / 2)
+                .attr("y", 12)
+                .style("font-size", "10px")
+                .style("font-weight", "bold")
+                .style("text-anchor", "middle")
+                .style("fill", "#666")
+                .text("Research Node");
+        }});
+
+        // Add query text using pre-calculated lines
+        queryBoxes.each(function(d) {{
+            const queryBox = d3.select(this);
+            const lines = d.textLines || [];
+            const lineHeight = 14;
+            
+            // Add text lines (starting after the caption)
+            lines.forEach((line, i) => {{
+                queryBox.append("text")
+                    .attr("x", 8)
+                    .attr("y", 26 + i * lineHeight)
+                    .style("font-size", "10px")
+                    .style("fill", "#333")
+                    .text(line);
+            }});
+        }});
+
         // Node interactions
         node.on("mouseover", function(event, d) {{
             // Skip virtual root
@@ -663,10 +702,11 @@ class ResearchVisualizer(BaseResearchVisualizer):
                 // Update node shape and size
                 updateNodeShape(d);
                 
-                // Recalculate layout to prevent overlapping
-                setTimeout(function() {{
-                    recalculateLayout();
-                }}, config.transitionDuration / 2);
+                // Update query box visibility for expanded node (only for research nodes)
+                if (d.data.operation === "research") {{
+                    queryBoxes.filter(boxData => boxData === d)
+                        .style("display", isExpanded ? "none" : "block");
+                }}
             }}
             
             showNodeInfo(d.data);
@@ -690,30 +730,46 @@ class ResearchVisualizer(BaseResearchVisualizer):
             function dragstarted(event, d) {{
                 // Prevent zoom when dragging nodes
                 event.sourceEvent.stopPropagation();
-                d.fx = d.x;
-                d.fy = d.y;
             }}
 
             function dragged(event, d) {{
-                d.fx = event.x;
-                d.fy = event.y;
+                d.x = event.x;
+                d.y = event.y;
                 
-                // Update links
-                link.attr("d", d3.linkVertical()
-                    .x(function(d) {{ return d.x; }})
-                    .y(function(d) {{ return d.y; }}));
+                // Update links with elbow connector
+                link.filter(linkData => linkData.source === d || linkData.target === d)
+                    .attr("d", linkData => {{
+                        const sourceX = linkData.source.x;
+                        const sourceY = linkData.source.y;
+                        const targetX = linkData.target.x;
+                        const targetY = linkData.target.y;
+                        const midY = (sourceY + targetY) / 2;
+                        return `M${{sourceX}},${{sourceY}}C${{sourceX}},${{midY}} ${{targetX}},${{midY}} ${{targetX}},${{targetY}}`;
+                    }});
                 
-                // Update nodes (now using transform)
-                node.attr("transform", function(d) {{ return `translate(${{d.x}}, ${{d.y}})`; }});
+                // Update node position
+                d3.select(this).attr("transform", `translate(${{d.x}}, ${{d.y}})`);
                 
-                // Update labels
-                label.attr("x", function(d) {{ return d.x; }})
-                    .attr("y", function(d) {{ return d.y + config.nodeRadius + 15; }});
+                // Update label
+                label.filter(labelData => labelData === d)
+                    .attr("x", d.x)
+                    .attr("y", d.y + config.nodeRadius + 15);
+                
+                // Update query box (only for research nodes)
+                if (d.data.operation === "research") {{
+                    queryBoxes.filter(boxData => boxData === d)
+                        .attr("transform", `translate(${{d.x + config.nodeRadius + 15}}, ${{d.y - 20}})`);
+                }}
+                
+                // Update expansion indicator
+                g.selectAll(".expansion-indicators text")
+                    .filter(indicatorData => indicatorData === d)
+                    .attr("x", d.x + config.nodeRadius * 0.8)
+                    .attr("y", d.y - config.nodeRadius * 0.8);
             }}
 
             function dragended(event, d) {{
-                d.fx = null;
-                d.fy = null;
+                // No simulation to update
             }}
 
             return d3.drag()
@@ -1213,31 +1269,7 @@ class ResearchVisualizer(BaseResearchVisualizer):
             );
         }};
 
-        // Recalculate tree layout to prevent overlapping
-        function recalculateLayout() {{
-            // Update node sizes and forces with stronger values
-            simulation.force("collide").radius(d => {{
-                if (expandedNodes.has(d.data.id)) {{
-                    const internalNodeCount = d.data.internal_nodes.length;
-                    return Math.max(80, internalNodeCount * 15);
-                }}
-                return config.nodeRadius * 2;
-            }}).strength(1);
-
-            simulation.force("link").distance(d => {{
-                const sourceExpanded = expandedNodes.has(d.source.data.id);
-                const targetExpanded = expandedNodes.has(d.target.data.id);
-                const baseDistance = config.nodeSizeY * 1.5;
-                return baseDistance * (sourceExpanded || targetExpanded ? 3 : 1.5);
-            }}).strength(0.7);
-
-            simulation.force("charge").strength(d => {{
-                return expandedNodes.has(d.data.id) ? -2000 : -1000;
-            }});
-
-            // Reheat simulation with higher energy
-            simulation.alpha(0.5).restart();
-        }}
+        // No need for recalculate layout function with static tree
         """
         
         return d3_script

@@ -8,10 +8,8 @@ __pycache__
 /logs
 /data
 /database
+/results
 /evaluation
-/webpage
-/paper
-/FlashResearch
 
 /vector_db
 /deepresearch_benchmarking
@@ -20,4 +18,5 @@ __pycache__
 *.html
 *.key
 *.json
+*.zip
 

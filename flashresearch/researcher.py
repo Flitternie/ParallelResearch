@@ -3,6 +3,7 @@ import random
 import logging
 import os
 from datetime import datetime
+
 from gpt_researcher.actions.utils import stream_output
 from gpt_researcher.actions.query_processing import plan_research_outline, get_search_results
 from gpt_researcher.document import DocumentLoader, OnlineDocumentLoader, LangChainDocumentLoader
@@ -508,7 +509,10 @@ class ResearchConductor:
         for retriever_class in self.researcher.retrievers:
             self.logger.debug(f"[ResearchConductor] Using retriever: {retriever_class.__name__}")
             # Instantiate the retriever with the sub-query
-            retriever = retriever_class(query, query_domains=query_domains)
+            try:
+                retriever = retriever_class(query, query_domains=query_domains, root_query=self.researcher.root_query)
+            except:
+                retriever = retriever_class(query, query_domains=query_domains)
 
             # Perform the search using the current retriever
             self.logger.debug(f"[ResearchConductor] Performing search with retriever: {retriever_class.__name__}")

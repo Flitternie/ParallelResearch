@@ -2,7 +2,7 @@ import json
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import threading
-from research_visualizer_legacy import ResearchVisualizer
+from visualization import ResearchVisualizer
 
 
 def count_words(text: str) -> int:

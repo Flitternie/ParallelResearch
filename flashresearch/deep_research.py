@@ -11,8 +11,9 @@ from enum import Enum
 from pydantic import BaseModel
 
 # NOTE: This is a modified version of the GPTResearcher class
-from modified_agent import GPTResearcher
-from modified_researcher import get_vector_store_results
+from flashresearch.agent import GPTResearcher
+from flashresearch.researcher import get_vector_store_results
+
 from gpt_researcher.llm_provider.generic.base import ReasoningEfforts
 from gpt_researcher.utils.llm import create_chat_completion
 from gpt_researcher.utils.enum import ReportType, ReportSource, Tone
@@ -76,6 +77,7 @@ class DeepResearch:
         # Class-level citations store for early aggregation on timeout
         self.citations: Dict[str, str] = {}
 
+        self.verbose = getattr(self.config, "verbose", False)
 
         self.researcher = GPTResearcher(
             query=self.query,
@@ -85,7 +87,9 @@ class DeepResearch:
             tone=self.tone,
             websocket=self.websocket,
             config_path=self.config_path,
-            headers=self.headers
+            headers=self.headers,
+            verbose=self.verbose,
+            root_query=self.query
         )
 
     def _on_logger_update(self, log_data):
@@ -403,7 +407,9 @@ Format each question on a new line starting with 'Question: '"""}
                         headers=self.headers,
                         log_handler=self.logger,  # Pass the logger as log_handler
                         enable_enhanced_logging=self.enable_enhanced_logging,  # Pass enhanced logging flag
-                        parent_node_id=query_node_id  # Pass the current node id to the researcher
+                        parent_node_id=query_node_id,  # Pass the current node id to the researcher
+                        verbose=self.verbose,  # Pass the verbose flag
+                        root_query=self.query  # Pass the original root query
                     )
 
                     logger.debug(f"[DeepResearch] Initialized GPTResearcher, starting conduct_research")
@@ -591,8 +597,8 @@ Format each question on a new line starting with 'Question: '"""}
             pass
 
         # Trim context to stay within word limits
-        # trimmed_context = trim_context_to_word_limit(all_context, max_words=self.max_context_words)
-        # logger.info(f"Trimmed context from {len(all_context)} items to {len(trimmed_context)} items to stay within word limit")
+        trimmed_context = trim_context_to_word_limit(all_context, max_words=self.max_context_words)
+        logger.info(f"Trimmed context from {len(all_context)} items to {len(trimmed_context)} items to stay within word limit")
 
         # Log the completion of this research level
         self.logger.update_node(

@@ -7,9 +7,9 @@ from datetime import datetime
 import traceback
 from pydantic import BaseModel
 
-# NOTE: This is a modified version of the GPTResearcher class
-from recursive_deep_research import TaskState, AsyncProgress, RecursiveDeepResearch, NodeResults as BaseNodeResults, AsyncTaskManager as BaseAsyncTaskManager, AsyncQueryTask
-from modified_agent import GPTResearcher
+from flashresearch.agent import GPTResearcher
+from flashresearch.recursive_deep_research import TaskState, AsyncProgress, RecursiveDeepResearch, NodeResults as BaseNodeResults, AsyncTaskManager as BaseAsyncTaskManager, AsyncQueryTask
+
 from gpt_researcher.llm_provider.generic.base import ReasoningEfforts
 from gpt_researcher.utils.llm import create_chat_completion
 from gpt_researcher.utils.enum import ReportType, ReportSource, Tone
@@ -18,77 +18,6 @@ from vector_db.build_vector_db import load_vector_db
 from utils import Config, ResearchLogger, ResearchProgress, trim_context_to_word_limit
 
 logger = logging.getLogger(__name__)
-
-
-class ResearchQuery(BaseModel):
-    query: str
-    researchGoal: str
-
-class BreadthPlanningDecision(BaseModel):
-    """Structured decision for breadth planning (number of subqueries)"""
-    num_subqueries: int
-    subqueries: List[ResearchQuery]  # List of generated subqueries
-    reasoning: str
-
-
-class AgenticPlanner:
-    """Agent-based task planner that dynamically determines research breadth and depth"""
-
-    def __init__(self, config: Config, user_query: str):
-        self.config = config
-        self.user_query = user_query
-        self.existing_queries: List[str] = []
-        self._existing_queries_lock = asyncio.Lock()
-
-    async def get_existing_queries_snapshot(self) -> List[str]:
-        async with self._existing_queries_lock:
-            return list(self.existing_queries)
-
-    async def add_existing_queries(self, queries: List[str]):
-        async with self._existing_queries_lock:
-            for q in queries:
-                if q not in self.existing_queries:
-                    self.existing_queries.append(q)
-
-    async def plan_breadth(self, query: str, max_breadth: int) -> int:
-        """Determine the number of subqueries (breadth) for the current level"""
-
-        existing_queries = await self.get_existing_queries_snapshot()
-        
-        messages = [
-            {"role": "system", "content": f"""You are an expert researcher generating search queries. Your task is to generate determine the OPTIMAL number of clear, non-overlapping search queries. 
-EFFICIENCY IS CRITICAL: More subqueries do not necessarily lead to better research. Minimize waste and redundancy. Broad topics need more subqueries, narrow topics need fewer. 
-
-SUBQUERY REQUIREMENTS:
-- Do not exceed {max_breadth+2} subqueries
-- Keep each subquery short and concise 
-- Make each subquery targets a DISTINCT aspect
-- Prefer fewer subqueries if coverage is sufficient
-- Ensure subqueries are relevant to the high-level research goal: {self.user_query}
-- Avoid overlap with existing queries:
-{"\n".join(existing_queries) if existing_queries else "None"}
-"""},
-            {"role": "user", "content": f"""Research query: {query}
-Return the minimum set of clear, non-overlapping subqueries that cover the goal. """}
-        ]
-        
-        response = await create_chat_completion(
-            messages=messages,
-            llm_provider=self.config.llm_provider,
-            model=self.config.reasoning_model,  
-            # NOTE: temperature set to 0 for reproducibility
-            temperature=0.0,
-            reasoning_effort=ReasoningEfforts.Medium.value,
-            seed=42,
-            response_format=BreadthPlanningDecision  # Use structured output
-        )
-        
-        if isinstance(response, str):
-            response = BreadthPlanningDecision.model_validate_json(response)
-            # Make sure the number of subqueries is within the allowed range
-            # response.subqueries = response.subqueries[:max_breadth+2]
-        return response
-
 
 
 class NodeResults(BaseNodeResults):
@@ -372,26 +301,6 @@ class FlashResearchRuntime(RecursiveDeepResearch):
         self.task_manager = AsyncTaskManager(self.logger)
         self.progress_tracker = AsyncProgress(depth, self.config.max_breadth)
 
-        self.task_planner = AgenticPlanner(config=self.config, user_query=query)
-
-    async def plan_serp_queries(self, query: str, max_breadth: int) -> List[Dict[str, str]]:
-        """Generate SERP queries for research"""
-
-        response = await self.task_planner.plan_breadth(
-            query=query,
-            max_breadth=max_breadth
-        )
-        logger.debug(f"[FlashResearch] Task planner determined breadth: {len(response.subqueries)}")
-        # With structured output, response is already parsed
-        queries = [{"query": q.query, "researchGoal": q.researchGoal} for q in response.subqueries]
-
-        try:
-            await self.task_planner.add_existing_queries([q["query"] for q in queries])
-        except Exception:
-            logger.error(f"[FlashResearch] Failed to add existing queries to task planner: {str(e)}")
-        
-        return queries
-
     async def deep_research(
         self,
         query: str,
@@ -480,32 +389,24 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                         headers=self.headers,
                         log_handler=self.logger,
                         enable_enhanced_logging=self.enable_enhanced_logging,
-                        parent_node_id=current_node_id
+                        parent_node_id=current_node_id,
+                        verbose=self.verbose
                     )
 
-                    # Conduct research with timeout (consistent with recursive implementation)
-                    try:
-                        # Use configured timeout or default to 300 seconds
-                        research_timeout = getattr(self.config, "individual_research_timeout", 300)
-                        if self.enable_early_termination:
-                            # Conduct research with monitoring (monitoring runs in parallel)
-                            research_task = asyncio.create_task(researcher.conduct_research())
-                            self.task_manager.tasks[current_node_id] = research_task 
-                            # Start monitoring task that will run throughout entire node lifecycle
-                            monitor_task = asyncio.create_task(
-                                self._monitor_research_progress(researcher, query, current_node_id, start_time)
-                            )
-                            # Wait for research to complete with timeout before harvesting results
-                            await asyncio.wait_for(research_task, timeout=research_timeout)
-                        else:
-                            # Conduct research without monitoring but with timeout
-                            await asyncio.wait_for(
-                                researcher.conduct_research(),
-                                timeout=research_timeout
-                            )
-                    except asyncio.TimeoutError:
-                        logger.error(f"[FlashResearch] Research timed out after {research_timeout}s for query: {query[:100]}...")
-                        raise asyncio.TimeoutError(f"Research timed out for query: {query[:100]}...")
+                    # Conduct research (no individual timeout - only global timeout applies)
+                    if self.enable_early_termination:
+                        # Conduct research with monitoring (monitoring runs in parallel)
+                        research_task = asyncio.create_task(researcher.conduct_research())
+                        self.task_manager.tasks[current_node_id] = research_task 
+                        # Start monitoring task that will run throughout entire node lifecycle
+                        monitor_task = asyncio.create_task(
+                            self._monitor_research_progress(researcher, query, current_node_id, start_time)
+                        )
+                        # Wait for research to complete (no timeout)
+                        await research_task
+                    else:
+                        # Conduct research without monitoring
+                        await researcher.conduct_research()
                     
                     # Calculate execution time
                     execution_time = time.time() - start_time
@@ -531,7 +432,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                         'context': context if context else "",
                         'sources': sources if sources else []
                     }
-                    
+
                     # Immediately log completion with learnings/citations to ensure persistence
                     self.logger.update_node(
                         node_id=current_node_id,
@@ -606,7 +507,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                         await self.task_manager.register_node(recursive_planning_node_id, current_node_id)
                         
                         # Generate sub-queries (NOTE: Controlled by BREADTH)
-                        sub_queries = await self.plan_serp_queries(next_query, max_breadth=new_breadth)
+                        sub_queries = await self.generate_serp_queries(next_query, new_breadth)
 
                         logger.debug(f"[FlashResearch] Generated {len(sub_queries)} recursive queries for depth {new_depth}")
                         
@@ -742,7 +643,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                 self.task_manager.tasks[current_node_id] = current_task
                 
             # Generate initial queries (NOTE: Controlled by BREADTH)
-            serp_queries = await self.plan_serp_queries(query, max_breadth=breadth)
+            serp_queries = await self.generate_serp_queries(query, breadth)
             logger.debug(f"[FlashResearch] Generated {len(serp_queries)} initial queries")
             
             # Create and launch initial async tasks with proper task management
@@ -805,11 +706,10 @@ class FlashResearchRuntime(RecursiveDeepResearch):
             except Exception:
                 pass
             
-            # NOTE: Context trimming is disabled for now
             # Trim context to stay within word limits
-            # trimmed_context = trim_context_to_word_limit(final_data['context'], max_words=self.max_context_words)
-            # logger.info(f"Trimmed context from {len(final_data['context'])} items to {len(trimmed_context)} items")
-            # final_data['context'] = trimmed_context
+            trimmed_context = trim_context_to_word_limit(final_data['context'], max_words=self.max_context_words)
+            logger.info(f"Trimmed context from {len(final_data['context'])} items to {len(trimmed_context)} items")
+            final_data['context'] = trimmed_context
 
         # Get node results (now merged with node annotations)
         node_results = await self.task_manager.get_node_results(current_node_id)
@@ -849,19 +749,9 @@ class FlashResearchRuntime(RecursiveDeepResearch):
             while True:
                 await asyncio.sleep(8)  # Check every 8 seconds
                 
-                # Check for timeout (use configured timeout or class default)
+                # No individual timeout check - only global timeout applies
+                # Track execution time for monitoring purposes
                 execution_time = time.time() - start_time
-                task_timeout = getattr(self.config, "individual_research_timeout", self.max_task_execution_time)
-                if execution_time >= task_timeout:
-                    logger.debug(f"[FlashResearch] Node {node_id} timed out after {execution_time:.2f}s")
-                    await self.task_manager.update_runtime_data(
-                        node_id, 
-                        termination_reason="timeout",
-                        execution_time=execution_time
-                    )
-                    # Cancel all child tasks
-                    await self.task_manager.cancel(node_id)
-                    break
                 
                 # Check if all child tasks are complete (for nodes with children)
                 if await self.task_manager.are_all_child_tasks_complete(node_id):

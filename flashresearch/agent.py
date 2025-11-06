@@ -4,6 +4,8 @@ import logging
 import asyncio
 from datetime import datetime
 
+from flashresearch.researcher import ResearchConductor
+
 from gpt_researcher.config import Config
 from gpt_researcher.memory import Memory
 from gpt_researcher.utils.enum import ReportSource, ReportType, Tone
@@ -12,10 +14,6 @@ from gpt_researcher.prompts import get_prompt_family
 from gpt_researcher.vector_store import VectorStoreWrapper
 from gpt_researcher.utils.token_tracker import TokenTracker
 
-# Research skills
-# NOTE: This is a modified version of the ResearchConductor class
-# from gpt_researcher.skills.researcher import ResearchConductor
-from modified_researcher import ResearchConductor
 from gpt_researcher.skills.writer import ReportGenerator
 from gpt_researcher.skills.context_manager import ContextManager
 from gpt_researcher.skills.browser import BrowserManager
@@ -31,6 +29,7 @@ from gpt_researcher.actions import (
     get_retrievers,
     choose_agent
 )
+
 
 class ResearchNode:
     """Class to represent a node in the research process"""
@@ -87,6 +86,7 @@ class ResearchNode:
             node_dict["duration"] = self.duration
         return node_dict
 
+
 class GPTResearcher:
     def __init__(
         self,
@@ -117,6 +117,7 @@ class GPTResearcher:
         prompt_family: str | None = None,
         enable_enhanced_logging: bool = False,
         parent_node_id: Optional[int] = None,
+        root_query: str = "",
         **kwargs
     ):
         # Initialize all the same parameters as GPTResearcher
@@ -143,6 +144,7 @@ class GPTResearcher:
         self.agent = agent
         self.role = role
         self.parent_query = parent_query
+        self.root_query = root_query
         self.subtopics = subtopics or []
         self.visited_urls = visited_urls or set()
         self.verbose = verbose

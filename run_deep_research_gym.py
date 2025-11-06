@@ -53,6 +53,7 @@ def setup_environment():
         os.environ["OPENAI_BASE_URL"] = open("openai_url.key").read().strip()
         os.environ["CUSTOM_EMBED_API_KEY"] = open("./openai.key").read().strip()
         os.environ["CUSTOM_EMBED_BASE_URL"] = "http://0.0.0.0:8000/v1/"
+        os.environ["FINEWEB_API_KEY"] = open("./fineweb.key").read().strip()
     except FileNotFoundError as e:
         raise RuntimeError(f"Missing API key file: {e}")
 
@@ -179,13 +180,13 @@ def run_single_process(args: Tuple[str, str, str, str, int, float | None, int, f
         
         # Import DeepResearch in each process based on version
         if version == "baseline":
-            from modified_deep_research import DeepResearch
+            from flashresearch import DeepResearch
         elif version == "parallel":
-            from recursive_deep_research import RecursiveDeepResearch as DeepResearch
+            from flashresearch import RecursiveDeepResearch as DeepResearch
         elif version == "runtime":
-            from flash_research_runtime import FlashResearchRuntime as DeepResearch
-        elif version == "adaptive":
-            from flash_research_adaptive import FlashResearchRuntime as DeepResearch
+            from flashresearch import FlashResearchRuntime as DeepResearch
+        elif version == "flashresearch":
+            from flashresearch import FlashResearch as DeepResearch
         
         # Run the async function with retry-on-timeout
         last_error = ""
@@ -316,11 +317,13 @@ def save_run_configuration(output_dir: str, args, question_files: List[str]):
     # Get DeepResearch class name based on version
     deep_research_name = "unknown"
     if args.version == "baseline":
-        deep_research_name = "modified_deep_research.DeepResearch"
+        deep_research_name = "flashresearch.DeepResearch"
     elif args.version == "parallel":
-        deep_research_name = "recursive_deep_research.RecursiveDeepResearch"
+        deep_research_name = "flashresearch.RecursiveDeepResearch"
     elif args.version == "runtime":
-        deep_research_name = "flash_research_runtime.FlashResearchRuntime"
+        deep_research_name = "flashresearch.FlashResearchRuntime"
+    elif args.version == "flash":
+        deep_research_name = "flashresearch.FlashResearch"
     
     snapshot = {
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
@@ -380,7 +383,7 @@ if __name__ == "__main__":
                        help="Number of attempts per run on timeout (default: 3)")
     parser.add_argument("--retry-delay", type=float, default=1.0,
                        help="Seconds to wait before retrying after a timeout (default: 1.0)")
-    parser.add_argument("--version", type=str, choices=["baseline", "parallel", "runtime", "adaptive"],
+    parser.add_argument("--version", type=str, choices=["baseline", "parallel", "runtime", "flash"],
                        help="Version of the research model to use")
 
     args = parser.parse_args()
