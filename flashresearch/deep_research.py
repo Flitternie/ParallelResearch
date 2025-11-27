@@ -19,7 +19,7 @@ from gpt_researcher.utils.llm import create_chat_completion
 from gpt_researcher.utils.enum import ReportType, ReportSource, Tone
 from gpt_researcher.actions.query_processing import get_search_results
 
-from vector_db.build_vector_db import load_vector_db
+from utils.vector_db import load_vector_db
 from utils import Config, ResearchLogger, ResearchProgress, trim_context_to_word_limit
 
 # NOTE: This is a modified version from gpt_researcher.skills.deep_research

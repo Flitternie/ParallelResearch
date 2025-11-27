@@ -15,7 +15,7 @@ export OPENAI_API_KEY=$(cat ./keys/openai.key)
 export OPENAI_BASE_URL=$(cat ./keys/openai_url.key)
 
 for method in "${METHODS[@]}"; do
-  OUT_DIR="./rebuttal/${method}/"
+  OUT_DIR="./exp/${method}/"
 
   # Check if the method directory exists
   if [ ! -d "${OUT_DIR}" ]; then

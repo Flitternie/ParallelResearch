@@ -10,7 +10,7 @@ from flashresearch.deep_research import TaskState, DeepResearch
 
 from gpt_researcher.utils.enum import ReportType, ReportSource, Tone
 
-from vector_db.build_vector_db import load_vector_db
+from utils.vector_db import load_vector_db
 from utils import ResearchProgress, trim_context_to_word_limit
 
 logger = logging.getLogger(__name__)
