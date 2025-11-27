@@ -1,0 +1,22 @@
+{
+    "FAST_LLM": "openai:Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "SMART_LLM": "openai:Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "STRATEGIC_LLM": "openai:Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "EMBEDDING": "custom:nomic-ai/nomic-embed-text-v1",
+    "RETRIEVER": "fineweb",
+    "STANDARD_MODEL": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "REASONING_MODEL": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "LLM_PROVIDER": "openai",
+    "MAX_DEPTH": 10,
+    "MAX_BREADTH": 4,
+    "CONCURRENCY_LIMIT": 32,
+    "DEEP_RESEARCH_CONCURRENCY": 32,
+    "REPORT_SOURCE": "web",
+    "TOTAL_WORDS": 7000,
+    "CONTEXT_BUFFER_SIZE": 10,
+    "MAX_CONTEXT_WORDS": 1000000,
+    "MAX_SEARCH_RESULTS_PER_QUERY": 5,
+    "TIME_LIMIT_SECONDS": 600,
+    "RUNTIME_SATISFACTION_THRESHOLD": 0.8,
+    "RUNTIME_QUALITY_THRESHOLD": 0.8
+}

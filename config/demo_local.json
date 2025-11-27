@@ -1,0 +1,17 @@
+{
+    "FAST_LLM": "azure_openai:gpt-4.1-mini",
+    "SMART_LLM": "azure_openai:gpt-4.1-mini",
+    "STRATEGIC_LLM": "azure_openai:o3-mini",
+    "EMBEDDING": "custom:nomic-ai/nomic-embed-text-v1",
+    "RETRIEVER": "brave",
+    "DOC_PATH": "./database",
+    "VECTOR_STORE_PATH": "./vector_db",
+    "STANDARD_MODEL": "gpt-4.1-mini",
+    "REASONING_MODEL": "o3-mini",
+    "LLM_PROVIDER": "azure_openai",
+    "MAX_DEPTH": 5,
+    "MAX_BREADTH": 4,
+    "CONCURRENCY_LIMIT": 32,
+    "REPORT_SOURCE": "langchain_vectorstore"
+}  
+  
