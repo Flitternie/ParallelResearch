@@ -1,5 +1,9 @@
 from flashresearch.deep_research import DeepResearch
-from flashresearch.parallel_deep_research import ParallelResearch
+from flashresearch.parallel_deep_research import ParallelDeepResearch
 from flashresearch.recursive_deep_research import RecursiveDeepResearch
 from flashresearch.flash_research_runtime import FlashResearchRuntime
 from flashresearch.flash_research import FlashResearch
+
+# Import profiling utilities
+from gpt_researcher.utils.latency_tracker import LatencyTracker
+from gpt_researcher.utils.token_tracker import TokenTracker

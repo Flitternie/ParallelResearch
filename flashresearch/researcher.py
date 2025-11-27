@@ -2,6 +2,7 @@ import asyncio
 import random
 import logging
 import os
+import time
 from datetime import datetime
 
 from gpt_researcher.actions.utils import stream_output
@@ -9,6 +10,7 @@ from gpt_researcher.actions.query_processing import plan_research_outline, get_s
 from gpt_researcher.document import DocumentLoader, OnlineDocumentLoader, LangChainDocumentLoader
 from gpt_researcher.utils.enum import ReportSource
 from gpt_researcher.utils.logging_config import get_json_handler
+from gpt_researcher.utils.latency_tracker import LatencyTracker
 
 from utils import truncate, clean_document_content
 
@@ -516,9 +518,15 @@ class ResearchConductor:
 
             # Perform the search using the current retriever
             self.logger.debug(f"[ResearchConductor] Performing search with retriever: {retriever_class.__name__}")
+            
+            # Track search API latency
+            start_time = time.time()
             search_results = await asyncio.to_thread(
                 retriever.search, max_results=self.researcher.cfg.max_search_results_per_query
             )
+            latency = time.time() - start_time
+            LatencyTracker.track_latency("search", latency, source=retriever_class.__name__)
+            
             self.logger.debug(f"[ResearchConductor] Search completed, got {len(search_results)} results from {retriever_class.__name__}")
 
             # Collect new URLs from search results
