@@ -376,6 +376,9 @@ class RecursiveDeepResearch(DeepResearch):
             query_task = AsyncQueryTask(serp_query, depth, breadth, parent_node_id, task_id)
             await self.task_manager.register_task(query_task)
             
+            # Holder for deferred child recursion to run AFTER releasing the semaphore
+            pending_children = None
+
             async with self.semaphore:  # Control concurrency
                 researcher = None
                 try:
@@ -507,33 +510,13 @@ class RecursiveDeepResearch(DeepResearch):
                         
                         logger.debug(f"[DeepResearch] Generated {len(sub_queries)} recursive queries for depth {new_depth}")
                         
-                        # Launch recursive tasks with proper task management
-                        recursive_tasks = []
-                        for sub_query in sub_queries:
-                            recursive_task = asyncio.create_task(
-                                self.deep_research(
-                                    query=sub_query['query'],
-                                    breadth=new_breadth,
-                                    depth=new_depth,
-                                    on_progress=on_progress,
-                                    parent_node_id=recursive_planning_node_id,  # Use planning node as parent
-                                    is_recursive=True
-                                )
-                            )
-                            recursive_tasks.append(recursive_task)
-                        
-                        # Wait for recursive tasks (no timeout - let individual research timeouts handle it)
-                        await asyncio.gather(*recursive_tasks, return_exceptions=True)
-                        
-                        # Update planning node with generated queries - moved here to complete after all child nodes terminate
-                        self.logger.update_node(
-                            node_id=recursive_planning_node_id,
-                            status=TaskState.COMPLETED.value,
-                            results={"generated_queries": len(sub_queries)},
-                            end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        )
-                        
-                        logger.debug(f"[Recursive DeepResearch] Completed task {task_id} with recursive sub-tasks")
+                        # Defer launching recursive tasks until AFTER releasing the semaphore
+                        pending_children = {
+                            "sub_queries": sub_queries,
+                            "new_breadth": new_breadth,
+                            "new_depth": new_depth,
+                            "recursive_planning_node_id": recursive_planning_node_id,
+                        }
                         
                 except asyncio.CancelledError:
                     logger.info(f"[Recursive DeepResearch] Task {task_id} was cancelled")
@@ -609,6 +592,41 @@ class RecursiveDeepResearch(DeepResearch):
                     query_task.state = TaskState.FAILED
                     await self.task_manager.complete_task(task_id, error=e)
                     raise e
+
+            # After releasing the semaphore, run any pending recursive children
+            if pending_children:
+                try:
+                    # Optional debug to help diagnose semaphore release ordering
+                    logger.debug(f"[Recursive DeepResearch] Released semaphore for task {task_id}, launching {len(pending_children['sub_queries'])} recursive sub-tasks at depth {pending_children['new_depth']}")
+
+                    recursive_tasks = []
+                    for sub_query in pending_children["sub_queries"]:
+                        recursive_task = asyncio.create_task(
+                            self.deep_research(
+                                query=sub_query['query'],
+                                breadth=pending_children["new_breadth"],
+                                depth=pending_children["new_depth"],
+                                on_progress=on_progress,
+                                parent_node_id=pending_children["recursive_planning_node_id"],  # Use planning node as parent
+                                is_recursive=True
+                            )
+                        )
+                        recursive_tasks.append(recursive_task)
+
+                    # Wait for recursive tasks (no timeout - let individual research timeouts handle it)
+                    await asyncio.gather(*recursive_tasks, return_exceptions=True)
+
+                    # Update planning node after all child nodes terminate
+                    self.logger.update_node(
+                        node_id=pending_children["recursive_planning_node_id"],
+                        status=TaskState.COMPLETED.value,
+                        results={"generated_queries": len(pending_children["sub_queries"])},
+                        end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    )
+
+                    logger.debug(f"[Recursive DeepResearch] Completed task {task_id} with recursive sub-tasks")
+                finally:
+                    pending_children = None
 
         else:  # Root call - generate initial queries with proper task management
             # Generate initial queries (NOTE: Controlled by BREADTH)

@@ -631,22 +631,6 @@ Format each question on a new line starting with 'Question: '"""}
         from gpt_researcher.utils.token_tracker import TokenTracker
         initial_costs = TokenTracker.get_totals().get("cost", 0.0)
 
-        # # Get initial feedback
-        # logger.debug(f"[DeepResearch] Generating feedback questions...")
-        # follow_up_questions = await self.generate_feedback(self.query)
-        # logger.debug(f"[DeepResearch] Generated {len(follow_up_questions)} feedback questions")
-
-        # # Collect answers (this would normally come from user interaction)
-        # answers = ["Automatically proceeding with research"] * len(follow_up_questions)
-
-        # # Combine query and Q&A
-        # follow_up_qa = [f"Q: {q}\nA: {a}" for q, a in zip(follow_up_questions, answers)]
-        # combined_query = f"""
-        # Initial Query: {self.query}\nFollow - up Questions and Answers:\n
-        # """ + "\n".join(follow_up_qa)
-
-        # logger.debug(f"[DeepResearch] Starting deep_research with combined query...")
-
         # Run deep research with optional hard timeout
         results: Dict[str, Any] = {}
         deep_task = asyncio.create_task(self.deep_research(

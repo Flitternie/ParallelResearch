@@ -4,12 +4,14 @@
 __pycache__
 
 /exp
+/keys
 /misc
 /logs
 /data
 /database
 /results
 /evaluation
+/rebuttal
 
 /vector_db
 /deepresearch_benchmarking

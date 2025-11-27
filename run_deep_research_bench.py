@@ -47,11 +47,11 @@ def setup_environment() -> None:
     """Setup environment variables for API keys (match batch_deep_research.py behavior)."""
     try:
         # Force-set to override any pre-existing env that could be incorrect
-        os.environ["OPENAI_API_KEY"] = open("./openai.key").read().strip()
-        os.environ["OPENAI_BASE_URL"] = open("openai_url.key").read().strip()
-        os.environ["TAVILY_API_KEY"] = open("./tavily.key").read().strip()
-        os.environ["CUSTOM_EMBED_API_KEY"] = open("./openai.key").read().strip()
+        os.environ["OPENAI_API_KEY"] = open("./keys/openai.key").read().strip()
+        os.environ["OPENAI_BASE_URL"] = open("keys/openai_url.key").read().strip()
+        os.environ["CUSTOM_EMBED_API_KEY"] = ""
         os.environ["CUSTOM_EMBED_BASE_URL"] = "http://0.0.0.0:8000/v1/"
+        os.environ["FINEWEB_API_KEY"] = open("./keys/fineweb.key").read().strip()
     except FileNotFoundError as e:
         raise RuntimeError(f"Missing API key file: {e}")
 

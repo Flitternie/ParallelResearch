@@ -28,13 +28,13 @@ def load_research_module(module_name):
     
     try:
         if module_name == 'baseline':
-            from modified_deep_research import DeepResearch
+            from flashresearch import DeepResearch
         elif module_name == 'parallel':
-            from modified_parallel_deep_research import ParallelizedDeepResearch as DeepResearch
-        elif module_name == 'recursive':
-            from recursive_deep_research import DeepResearch
+            from flashresearch import RecursiveDeepResearch as DeepResearch
         elif module_name == 'runtime':
-            from flash_research_runtime import FlashResearchRuntime as DeepResearch
+            from flashresearch import FlashResearchRuntime as DeepResearch
+        elif module_name == 'flash':
+            from flashresearch import FlashResearch as DeepResearch
         else:
             logger.error(f"Unknown research module: {module_name}")
             return False
@@ -50,7 +50,7 @@ load_research_module(research_module_name)
 
 # Try to load visualizer
 try:
-    from research_visualizer_d3 import ResearchVisualizer
+    from visualization import ResearchVisualizer
 except ImportError as e:
     logger.error(f"Import error for visualizer: {e}")
     ResearchVisualizer = None
@@ -66,10 +66,9 @@ def setup_environment():
     try:
         os.environ["OPENAI_API_KEY"] = open("./openai.key").read().strip()
         os.environ["OPENAI_BASE_URL"] = open("openai_url.key").read().strip()
-        os.environ["BRAVE_API_KEY"] = open("./brave.key").read().strip()
-        os.environ["CUSTOM_EMBED_API_KEY"] = open("./openai.key").read().strip()
-        # os.environ["CUSTOM_EMBED_BASE_URL"] = open("openai_url.key").read().strip()
+        os.environ["CUSTOM_EMBED_API_KEY"] = ""
         os.environ["CUSTOM_EMBED_BASE_URL"] = "http://0.0.0.0:8000/v1/"
+        os.environ["FINEWEB_API_KEY"] = open("./keys/fineweb.key").read().strip()
         return True
     except Exception as e:
         logger.error(f"Error setting up environment: {e}")

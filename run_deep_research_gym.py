@@ -49,11 +49,11 @@ def write_to_csv(csv_file_path: str, result: ProcessResult):
 def setup_environment():
     """Setup environment variables for API keys"""
     try:
-        os.environ["OPENAI_API_KEY"] = open("./openai.key").read().strip()
-        os.environ["OPENAI_BASE_URL"] = open("openai_url.key").read().strip()
-        os.environ["CUSTOM_EMBED_API_KEY"] = open("./openai.key").read().strip()
+        os.environ["OPENAI_API_KEY"] = open("./keys/deepinfra.key").read().strip()
+        os.environ["OPENAI_BASE_URL"] = open("./keys/deepinfra_url.key").read().strip()
+        os.environ["CUSTOM_EMBED_API_KEY"] = ""
         os.environ["CUSTOM_EMBED_BASE_URL"] = "http://0.0.0.0:8000/v1/"
-        os.environ["FINEWEB_API_KEY"] = open("./fineweb.key").read().strip()
+        os.environ["FINEWEB_API_KEY"] = open("./keys/fineweb.key").read().strip()
     except FileNotFoundError as e:
         raise RuntimeError(f"Missing API key file: {e}")
 
@@ -185,7 +185,7 @@ def run_single_process(args: Tuple[str, str, str, str, int, float | None, int, f
             from flashresearch import RecursiveDeepResearch as DeepResearch
         elif version == "runtime":
             from flashresearch import FlashResearchRuntime as DeepResearch
-        elif version == "flashresearch":
+        elif version == "flash":
             from flashresearch import FlashResearch as DeepResearch
         
         # Run the async function with retry-on-timeout

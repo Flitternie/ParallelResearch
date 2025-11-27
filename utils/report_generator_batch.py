@@ -2,11 +2,13 @@ import os
 import json
 import asyncio
 import argparse
+import statistics
+import math
 from typing import List, Tuple, Optional
-from report_generator import ReportGenerator
+from utils.report_generator import ReportGenerator
 
-os.environ["OPENAI_API_KEY"] = open("./openai.key").read().strip()
-os.environ["OPENAI_BASE_URL"] = open("openai_url.key").read().strip()
+os.environ["OPENAI_API_KEY"] = open("./keys/openai.key").read().strip()
+os.environ["OPENAI_BASE_URL"] = open("./keys/openai_url.key").read().strip()
 
 def find_progress_files(root_dir: str) -> List[str]:
     results: List[str] = []
@@ -181,38 +183,54 @@ async def main_async():
         return
 
     # Pre-scan to compute average number of eligible nodes per progress file
-    total_eligible = 0
+    eligible_counts = []
     for p in progress_files:
-        total_eligible += count_eligible_nodes(p, args.max_depth, args.config, args.root_id, args.random_seed)
-    avg_eligible = (total_eligible / len(progress_files)) if progress_files else 0
-    print(f"Average eligible nodes across {len(progress_files)} files: {avg_eligible:.2f}")
+        eligible_counts.append(count_eligible_nodes(p, args.max_depth, args.config, args.root_id, args.random_seed))
+    avg_eligible = statistics.mean(eligible_counts) if eligible_counts else 0
+    sd_eligible = statistics.stdev(eligible_counts) if len(eligible_counts) > 1 else 0
+    ci_eligible = 1.96 * sd_eligible / math.sqrt(len(eligible_counts)) if len(eligible_counts) > 1 else 0
+    print(f"Average eligible nodes across {len(progress_files)} files: {avg_eligible:.2f} ± {ci_eligible:.2f}, std={sd_eligible:.2f}")
 
     # Pre-scan to compute average unique learnings and citations per progress file
-    total_learnings = 0
-    total_citations = 0
-    counted_files = 0
+    learnings_counts = []
+    citations_counts = []
     for p in progress_files:
         try:
             generator = ReportGenerator(p, args.config, root_id=args.root_id, random_seed=args.random_seed)
             research_data = generator.compile_data(max_depth=args.max_depth, ordering=args.ordering, max_breadth=args.max_breadth)
             num_learnings = len(set(research_data.get('learnings', []) or []))
             num_citations = len((research_data.get('citations', {}) or {}))
-            total_learnings += num_learnings
-            total_citations += num_citations
-            counted_files += 1
+            learnings_counts.append(num_learnings)
+            citations_counts.append(num_citations)
         except Exception as e:
             print(f"Failed to compile data for {p}: {e}")
-    if counted_files > 0:
-        avg_learnings = total_learnings / counted_files
-        avg_citations = total_citations / counted_files
-        print(f"Average unique learnings across {counted_files} files: {avg_learnings:.2f}")
-        print(f"Average citations across {counted_files} files: {avg_citations:.2f}")
+    if learnings_counts:
+        avg_learnings = statistics.mean(learnings_counts)
+        sd_learnings = statistics.stdev(learnings_counts) if len(learnings_counts) > 1 else 0
+        ci_learnings = 1.96 * sd_learnings / math.sqrt(len(learnings_counts)) if len(learnings_counts) > 1 else 0
+        print(f"Average unique learnings across {len(learnings_counts)} files: {avg_learnings:.2f} ± {ci_learnings:.2f}, std={sd_learnings:.2f}")
+    if citations_counts:
+        avg_citations = statistics.mean(citations_counts)
+        sd_citations = statistics.stdev(citations_counts) if len(citations_counts) > 1 else 0
+        ci_citations = 1.96 * sd_citations / math.sqrt(len(citations_counts)) if len(citations_counts) > 1 else 0
+        print(f"Average citations across {len(citations_counts)} files: {avg_citations:.2f} ± {ci_citations:.2f}, std={sd_citations:.2f}")
 
     if args.analysis:
         return
 
     out_lock = asyncio.Lock()
     semaphore = asyncio.Semaphore(max(1, args.concurrency))
+
+    # if the files are already in the output directory, skip them
+    skipped_files = []
+    for p in progress_files:
+        question_id, run_idx, try_idx = parse_ids_from_path(p)
+        out_name = f"{question_id}_run_{run_idx}.a"
+        out_path = os.path.join(args.output, out_name)
+        if os.path.exists(out_path):
+            skipped_files.append(p)
+            progress_files.remove(p)
+    print(f"Skipped {len(skipped_files)} files that already have outputs in {args.output}")
 
     tasks = [asyncio.create_task(process_one(p, args, out_lock, semaphore)) for p in progress_files]
     total = len(tasks)

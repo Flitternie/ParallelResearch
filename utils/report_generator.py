@@ -9,9 +9,6 @@ from flashresearch.agent import GPTResearcher
 from gpt_researcher.utils.enum import ReportType
 from utils import Config, trim_context_to_word_limit
 
-os.environ["OPENAI_API_KEY"] = open("./openai.key").read().strip()
-os.environ["OPENAI_BASE_URL"] = open("openai_url.key").read().strip()
-
 class ReportGenerator:
     def __init__(self, progress_file: str, config_file: str, root_id: str | None = None, random_seed: int | None = None):
         # Load full progress log (nodes + edges)
