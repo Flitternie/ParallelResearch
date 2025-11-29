@@ -781,7 +781,7 @@ Format each question on a new line starting with 'Question: '"""}
                     "token_counts_by_model": token_counts,
                     "token_counts_by_usage": per_usage,
                     "total_cost": totals.get("cost", 0.0),
-                    "execution_time": str(execution_time),
+                    "execution_time": execution_time.total_seconds(),
                     "summary": token_summary
                 }, f, indent=2)
             

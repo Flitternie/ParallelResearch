@@ -46,35 +46,49 @@ async def main():
     with open(f"{logs_dir}/report.md", "w") as f:
         f.write(report)
     
-    # Print token usage summary if available
+    # Print summary
+    separator = "=" * 60
+    
+    # Token usage summary
+    print(f"\n{separator}")
+    print("TOKEN USAGE SUMMARY")
+    print(separator)
     try:
         import json
         with open(f"{logs_dir}/token_usage.json", "r") as f:
             token_data = json.load(f)
-        print("\n" + "="*60)
-        print("TOKEN USAGE SUMMARY")
-        print("="*60)
-        # Print overall summary
         print(token_data.get("summary", "No summary available"))
-        print("="*60 + "\n")
-        print("Total Execution Time (s):", token_data.get("execution_time", "N/A"))
-        print("="*60 + "\n")
     except Exception as e:
         print(f"Could not load token usage: {e}")
-
-    # Get detailed profiling data programmatically
-    latency_data = LatencyTracker.get_summary()
     
+    # Execution time summary
+    print(f"\n{separator}")
+    print("EXECUTION TIME SUMMARY")
+    print(separator)
+    try:
+        execution_time = token_data.get("execution_time", None)
+        if execution_time is not None:
+            print(f"Total Execution Time: {execution_time:.2f}s")
+        else:
+            print("Total Execution Time: N/A")
+    except NameError:
+        print("Total Execution Time: N/A")
+    
+    # Latency profiling summary
+    latency_data = LatencyTracker.get_summary()
     if 'llm' in latency_data:
         llm_stats = latency_data['llm']
-        print(f"\nLLM Efficiency: {llm_stats['avg_latency']:.3f}s average per call")
-    
+        print(f"LLM Avg Latency:       {llm_stats['avg_latency']:.2f}s per call")
     if 'search' in latency_data:
         search_stats = latency_data['search']
-        print(f"Search Efficiency: {search_stats['avg_latency']:.3f}s average per call")
+        print(f"Search Avg Latency:    {search_stats['avg_latency']:.2f}s per call")
     
+    print(f"\n{separator}")
+    print("DETAILED LATENCY BREAKDOWN")
+    print(separator)
     print(LatencyTracker.get_formatted_summary())
-    # save the latency data to a file
+    
+    # Save the latency data to a file
     with open(f"{logs_dir}/latency_summary.txt", "w") as f:
         f.write(LatencyTracker.get_formatted_summary())
     

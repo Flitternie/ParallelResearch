@@ -2,7 +2,7 @@
     "FAST_LLM": "azure_openai:gpt-4.1-mini",
     "SMART_LLM": "azure_openai:gpt-4.1-mini",
     "STRATEGIC_LLM": "azure_openai:o3-mini",
-    "EMBEDDING": "custom:nomic-ai/nomic-embed-text-v1",
+    "EMBEDDING": "openai:text-embedding-3-small",
     "RETRIEVER": "brave",
     "DOC_PATH": "./database",
     "VECTOR_STORE_PATH": "./vector_db",
