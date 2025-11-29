@@ -85,12 +85,46 @@ def truncate(obj, max_length=100):
 
 
 class Config:
+    """Unified config class that parses LLM configuration.
+    
+    LLM settings use the unified format 'provider:model' (e.g., 'openai:gpt-4.1-mini').
+    Parses FAST_LLM, SMART_LLM, STRATEGIC_LLM into their provider/model components.
+    """
+    
     def __init__(self, config_path: str):
         with open(config_path, 'r') as f:
             self.config = json.load(f)
+        
         # Set each key as an attribute (lowercase)
         for key, value in self.config.items():
             setattr(self, key.lower(), value)
+        
+        # Parse unified LLM configs
+        self._set_llm_attributes()
+    
+    def _parse_llm(self, llm_str: str) -> tuple:
+        """Parse llm string into (provider, model)."""
+        if llm_str is None:
+            return None, None
+        if ":" in llm_str:
+            provider, model = llm_str.split(":", 1)
+            return provider, model
+        # If no provider specified, return as model only
+        return None, llm_str
+    
+    def _set_llm_attributes(self) -> None:
+        """Parse LLM strings into provider/model attributes."""
+        # Parse FAST_LLM
+        if hasattr(self, 'fast_llm'):
+            self.fast_llm_provider, self.fast_llm_model = self._parse_llm(self.fast_llm)
+        
+        # Parse SMART_LLM
+        if hasattr(self, 'smart_llm'):
+            self.smart_llm_provider, self.smart_llm_model = self._parse_llm(self.smart_llm)
+        
+        # Parse STRATEGIC_LLM
+        if hasattr(self, 'strategic_llm'):
+            self.strategic_llm_provider, self.strategic_llm_model = self._parse_llm(self.strategic_llm)
     
     def get(self, key: str, default: Any = None) -> Any:
         return self.config.get(key, default)

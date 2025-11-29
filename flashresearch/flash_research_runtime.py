@@ -196,8 +196,8 @@ Consider efficiency - if the goal is mostly satisfied, recommend termination to 
         
         response = await create_chat_completion(
             messages=messages,
-            llm_provider=config.llm_provider,
-            model=config.reasoning_model,
+            llm_provider=config.strategic_llm_provider,
+            model=config.strategic_llm_model,
             temperature=0.0,
             max_tokens=400,
             reasoning_effort=ReasoningEfforts.Medium.value,

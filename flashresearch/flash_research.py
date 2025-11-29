@@ -69,8 +69,8 @@ Return the minimum set of clear, non-overlapping subqueries that cover the goal.
         
         response = await create_chat_completion(
             messages=messages,
-            llm_provider=self.config.llm_provider,
-            model=self.config.reasoning_model,  
+            llm_provider=self.config.strategic_llm_provider,
+            model=self.config.strategic_llm_model,
             # NOTE: temperature set to 0 for reproducibility
             temperature=0.0,
             reasoning_effort=ReasoningEfforts.Medium.value,

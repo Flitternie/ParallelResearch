@@ -201,7 +201,7 @@ class AsyncTaskManager:
 
 
 
-class ParallelResearch(DeepResearch):
+class ParallelDeepResearch(DeepResearch):
     def __init__(
         self,
         query: str,

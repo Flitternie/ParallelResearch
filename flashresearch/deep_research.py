@@ -190,8 +190,8 @@ Format each question on a new line starting with 'Question: '"""}
 
         response = await create_chat_completion(
             messages=messages,
-            llm_provider=self.config.llm_provider,
-            model=self.config.reasoning_model,  # Using reasoning model for better question generation
+            llm_provider=self.config.strategic_llm_provider,
+            model=self.config.strategic_llm_model,
             # NOTE: temperature set to 0 for reproducibility
             temperature=0.0,
             max_tokens=500,
@@ -225,8 +225,8 @@ Format each question on a new line starting with 'Question: '"""}
 
         response = await create_chat_completion(
             messages=messages,
-            llm_provider=self.config.llm_provider,
-            model=self.config.standard_model,  # Using GPT-4 for general task
+            llm_provider=self.config.smart_llm_provider,
+            model=self.config.smart_llm_model,
             # NOTE: temperature set to 0 for reproducibility
             temperature=0.0,
             reasoning_effort=ReasoningEfforts.High.value,
@@ -260,8 +260,8 @@ Format each question on a new line starting with 'Question: '"""}
 
         response = await create_chat_completion(
             messages=messages,
-            llm_provider=self.config.llm_provider,
-            model=self.config.reasoning_model,  # Using reasoning model for analysis
+            llm_provider=self.config.strategic_llm_provider,
+            model=self.config.strategic_llm_model,
             # NOTE: temperature set to 0 for reproducibility
             temperature=0.0,
             max_tokens=1000,

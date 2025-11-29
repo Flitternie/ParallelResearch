@@ -4,9 +4,6 @@
     "STRATEGIC_LLM": "openai:o3-mini",
     "EMBEDDING": "custom:nomic-ai/nomic-embed-text-v1",
     "RETRIEVER": "fineweb",
-    "STANDARD_MODEL": "gpt-4.1-mini",
-    "REASONING_MODEL": "o3-mini",
-    "LLM_PROVIDER": "openai",
     "MAX_DEPTH": 3,
     "MAX_BREADTH": 4,
     "CONCURRENCY_LIMIT": 32,
@@ -17,5 +14,6 @@
     "MAX_CONTEXT_WORDS": 100000,
     "MAX_SEARCH_RESULTS_PER_QUERY": 5,
     "RUNTIME_SATISFACTION_THRESHOLD": 0.5,
-    "RUNTIME_QUALITY_THRESHOLD": 0.5
+    "RUNTIME_QUALITY_THRESHOLD": 0.5,
+    "VERBOSE": true
 }
