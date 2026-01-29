@@ -5,7 +5,7 @@ import argparse
 import random
 from datetime import datetime
 from collections import deque, defaultdict
-from flashresearch.agent import GPTResearcher
+from parallelresearch.agent import GPTResearcher
 from gpt_researcher.utils.enum import ReportType
 from utils import Config, trim_context_to_word_limit
 

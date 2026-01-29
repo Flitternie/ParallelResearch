@@ -1,8 +1,6 @@
-# FlashResearch
+# ParallelResearch
 
-Official implementation for the paper [FlashResearch: Real-time Agent Orchestration for Efficient Deep Research](https://arxiv.org/abs/2510.05145).
-
-FlashResearch transforms sequential deep research into parallel, runtime orchestration by dynamically decomposing complex queries into tree-structured sub-tasks, achieving up to **5× speedup** while maintaining comparable quality.
+ParallelResearch transforms sequential deep research into parallel, runtime orchestration by dynamically decomposing complex queries into tree-structured sub-tasks, achieving up to **5× speedup** while maintaining comparable quality.
 
 ## Key Features
 
@@ -16,19 +14,11 @@ First, create a conda environment and install the dependencies:
 
 ```bash
 conda env create -f env.yml
-conda activate flash
+conda activate parallelresearch
 pip install -r requirements.txt
 ```
 
-Then, install the GPT Researcher:
-
-```bash
-git clone https://github.com/Flitternie/gpt-researcher.git
-cd gpt-researcher
-pip install -e .
-```
-
-Set your API keys under the directory of `keys/`:
+Then, install the GPT Researcher. Set your API keys under the directory of `keys/`:
 ```
 keys/openai.key       # OPENAI_API_KEY
 keys/openai_url.key   # OPENAI_BASE_URL
@@ -77,7 +67,7 @@ Available `--version` options:
 | Version | Description |
 |---------|-------------|
 | `baseline` | GPT Researcher's baseline implementation |
-| `flash` | FlashResearch (full method) |
+| `parallelresearch` | ParallelResearch (full method) |
 | `runtime` | Ablation without adaptive planning |
 | `parallel` | Ablation without adaptive planning or real-time orchestration |
 
@@ -97,16 +87,6 @@ python run_deep_research_bench.py \
   --version baseline \
   --model_name baseline
 ```
-
-### Evaluation
-
-**DeepResearchGym:**
-```bash
-git clone https://github.com/Flitternie/deepresearchgym.git
-bash eval_deepresearch_gym.sh
-```
-
-**DeepResearch Bench:** Please follow the instructions of [DeepResearch Bench](https://github.com/Ayanami0730/deep_research_bench) to run the evaluation.
 
 ## Configuration
 
@@ -143,15 +123,15 @@ LLM settings use the unified format `provider:model` (e.g., `openai:gpt-4.1-mini
 ## Project Structure
 
 ```
-flashresearch/
-├── flashresearch/          # Core implementation
+parallelresearch/
+├── parallelresearch/          # Core implementation
 │   ├── agent.py            # Base agent logic
 │   ├── researcher.py       # Base researcher logic
 │   ├── deep_research.py    # GPT-Researcher baseline
 │   ├── parallel_deep_research.py       # Parallel version
 │   ├── recursive_deep_research.py      # Parallel version with recursive structure
-│   ├── flash_research_runtime.py       # Ablation version without adaptive planning
-│   └── flash_research.py               # FlashResearch (full method)
+│   ├── parallel_research_runtime.py       # Ablation version without adaptive planning
+│   └── parallel_research.py               # ParallelResearch (full method)
 ├── config/                 # Experiment configurations
 ├── evaluation/             # Evaluation scripts
 ├── visualization/          # Visualization scripts
@@ -159,15 +139,4 @@ flashresearch/
 ├── exp/                    # Experiment results
 ├── logs/                   # Execution logs for example runs
 └── data/                   # Benchmark datasets
-```
-
-## Citation
-
-```bibtex
-@article{nie2025flashresearch,
-  title={FlashResearch: Real-time Agent Orchestration for Efficient Deep Research},
-  author={Nie, Lunyiu and Lipka, Nedim and Rossi, Ryan A and Chaudhuri, Swarat},
-  journal={arXiv preprint arXiv:2510.05145},
-  year={2025}
-}
 ```

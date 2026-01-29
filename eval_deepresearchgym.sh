@@ -8,7 +8,7 @@ cd "${PROJECT_ROOT}"
 QUESTION_DIR="./data/gym_question/"
 KEY_POINT_DIR="./deepresearchgym/key_point/"
 TIMES=5
-METHODS=("gym_time_2_baseline" "gym_time_2_ablation" "gym_time_2_flashresearch" "gym_time_10_baseline" "gym_time_10_ablation" "gym_time_10_flashresearch")
+METHODS=("gym_time_2_baseline" "gym_time_2_ablation" "gym_time_2_parallelresearch" "gym_time_10_baseline" "gym_time_10_ablation" "gym_time_10_parallelresearch")
 CONCURRENCY=64
 
 export OPENAI_API_KEY=$(cat ./keys/openai.key)

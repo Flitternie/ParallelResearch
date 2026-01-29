@@ -1,21 +1,21 @@
 import logging
-from flashresearch import LatencyTracker
+from parallelresearch import LatencyTracker
 from visualization import ResearchVisualizer
 import os
 import time
 
-VERSION = "flash"
+VERSION = "parallelresearch"
 
 if VERSION == "baseline":
-    from flashresearch import DeepResearch
+    from parallelresearch import DeepResearch
 elif VERSION == "parallel":
     # there exist two implementations of parallel deep research
-    # from flashresearch import ParallelDeepResearch as DeepResearch
-    from flashresearch import RecursiveDeepResearch as DeepResearch
+    # from parallelresearch import ParallelDeepResearch as DeepResearch
+    from parallelresearch import RecursiveDeepResearch as DeepResearch
 elif VERSION == "runtime":
-    from flashresearch import FlashResearchRuntime as DeepResearch
-elif VERSION == "flash":
-    from flashresearch import FlashResearch as DeepResearch
+    from parallelresearch import ParallelResearchRuntime as DeepResearch
+elif VERSION == "parallelresearch":
+    from parallelresearch import ParallelResearch as DeepResearch
 
 # generate a new directory for the logs based on the current timestamp
 logs_dir = f"logs/{time.strftime('%Y%m%d_%H%M%S')}"

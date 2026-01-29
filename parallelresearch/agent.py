@@ -4,7 +4,7 @@ import logging
 import asyncio
 from datetime import datetime
 
-from flashresearch.researcher import ResearchConductor
+from parallelresearch.researcher import ResearchConductor
 
 from gpt_researcher.config import Config
 from gpt_researcher.memory import Memory

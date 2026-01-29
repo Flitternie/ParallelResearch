@@ -5,8 +5,8 @@ import logging
 from datetime import datetime
 import traceback
 
-from flashresearch.agent import GPTResearcher
-from flashresearch.deep_research import TaskState, DeepResearch
+from parallelresearch.agent import GPTResearcher
+from parallelresearch.deep_research import TaskState, DeepResearch
 
 from gpt_researcher.utils.enum import ReportType, ReportSource, Tone
 

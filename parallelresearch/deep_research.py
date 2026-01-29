@@ -11,8 +11,8 @@ from enum import Enum
 from pydantic import BaseModel
 
 # NOTE: This is a modified version of the GPTResearcher class
-from flashresearch.agent import GPTResearcher
-from flashresearch.researcher import get_vector_store_results
+from parallelresearch.agent import GPTResearcher
+from parallelresearch.researcher import get_vector_store_results
 
 from gpt_researcher.llm_provider.generic.base import ReasoningEfforts
 from gpt_researcher.utils.llm import create_chat_completion

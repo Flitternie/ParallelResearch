@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Get configuration from environment variables (set by frontend.py launcher)
 run_config = os.environ.get('FRONTEND_CONFIG_PATH', './config.json')
-research_module_name = os.environ.get('FRONTEND_RESEARCH_MODULE', 'flash_research_runtime')
+research_module_name = os.environ.get('FRONTEND_RESEARCH_MODULE', 'parallel_research_runtime')
 
 # Dynamic import of the research module
 DeepResearch = None
@@ -28,13 +28,13 @@ def load_research_module(module_name):
     
     try:
         if module_name == 'baseline':
-            from flashresearch import DeepResearch
+            from parallelresearch import DeepResearch
         elif module_name == 'parallel':
-            from flashresearch import RecursiveDeepResearch as DeepResearch
+            from parallelresearch import RecursiveDeepResearch as DeepResearch
         elif module_name == 'runtime':
-            from flashresearch import FlashResearchRuntime as DeepResearch
-        elif module_name == 'flash':
-            from flashresearch import FlashResearch as DeepResearch
+            from parallelresearch import ParallelResearchRuntime as DeepResearch
+        elif module_name == 'parallelresearch':
+            from parallelresearch import ParallelResearch as DeepResearch
         else:
             logger.error(f"Unknown research module: {module_name}")
             return False
@@ -366,7 +366,7 @@ def index():
     """Main application page"""
     # Create a friendly display name for the research module
     module_display_names = {
-        'runtime': 'Flash Research',
+        'runtime': 'Parallel Research',
         'baseline': 'Deep Research',
         'parallel': 'Parallel Research',
         'recursive': 'Parallel Research'

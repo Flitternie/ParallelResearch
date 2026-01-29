@@ -4,7 +4,7 @@ import asyncio
 import logging
 from pydantic import BaseModel
 
-from flashresearch.flash_research_runtime import FlashResearchRuntime
+from parallelresearch.parallel_research_runtime import ParallelResearchRuntime
 from gpt_researcher.llm_provider.generic.base import ReasoningEfforts
 from gpt_researcher.utils.llm import create_chat_completion
 from gpt_researcher.utils.enum import Tone
@@ -85,8 +85,8 @@ Return the minimum set of clear, non-overlapping subqueries that cover the goal.
         return response
 
 
-class FlashResearch(FlashResearchRuntime):
-    """Enhanced FlashResearchRuntime with adaptive planning"""
+class ParallelResearch(ParallelResearchRuntime):
+    """Enhanced ParallelResearchRuntime with adaptive planning"""
 
     def __init__(
         self,
@@ -122,13 +122,13 @@ class FlashResearch(FlashResearchRuntime):
             query=query,
             max_breadth=max_breadth
         )
-        logger.debug(f"[FlashResearch] Task planner determined breadth: {len(response.subqueries)}")
+        logger.debug(f"[ParallelResearch] Task planner determined breadth: {len(response.subqueries)}")
         # With structured output, response is already parsed
         queries = [{"query": q.query, "researchGoal": q.researchGoal} for q in response.subqueries]
 
         try:
             await self.task_planner.add_existing_queries([q["query"] for q in queries])
         except Exception:
-            logger.error(f"[FlashResearch] Failed to add existing queries to task planner: {str(e)}")
+            logger.error(f"[ParallelResearch] Failed to add existing queries to task planner: {str(e)}")
         
         return queries

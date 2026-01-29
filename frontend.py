@@ -102,8 +102,8 @@ def main():
     
     # Validate research module can be imported
     try:
-        if args.version == 'flash_research_runtime':
-            import flash_research_runtime
+        if args.version == 'parallel_research_runtime':
+            import parallel_research_runtime
         elif args.version == 'modified_deep_research':
             import modified_deep_research
         elif args.version == 'modified_parallel_deep_research':

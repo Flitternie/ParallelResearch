@@ -7,8 +7,8 @@ from datetime import datetime
 import traceback
 from pydantic import BaseModel
 
-from flashresearch.agent import GPTResearcher
-from flashresearch.recursive_deep_research import TaskState, AsyncProgress, RecursiveDeepResearch, NodeResults as BaseNodeResults, AsyncTaskManager as BaseAsyncTaskManager, AsyncQueryTask
+from parallelresearch.agent import GPTResearcher
+from parallelresearch.recursive_deep_research import TaskState, AsyncProgress, RecursiveDeepResearch, NodeResults as BaseNodeResults, AsyncTaskManager as BaseAsyncTaskManager, AsyncQueryTask
 
 from gpt_researcher.llm_provider.generic.base import ReasoningEfforts
 from gpt_researcher.utils.llm import create_chat_completion
@@ -265,7 +265,7 @@ Consider efficiency - if the goal is mostly satisfied, recommend termination to 
             )
 
 
-class FlashResearchRuntime(RecursiveDeepResearch):
+class ParallelResearchRuntime(RecursiveDeepResearch):
     """Enhanced RecursiveDeepResearch with runtime goal satisfaction monitoring and early termination"""
     
     def __init__(
@@ -314,7 +314,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
         is_recursive: bool = False
     ) -> Dict[str, Any]:
         """Recursive async-based parallel research with runtime monitoring and early termination"""
-        logger.debug(f"[FlashResearch] runtime research called with query: {query[:100]}..., breadth: {breadth}, depth: {depth}")
+        logger.debug(f"[ParallelResearch] runtime research called with query: {query[:100]}..., breadth: {breadth}, depth: {depth}")
 
         # Log the start of this research level and register node for result tracking
         current_node_id = self.logger.add_node(
@@ -367,7 +367,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                     query_task.start_time = datetime.now()
                     start_time = time.time()
                     
-                    logger.debug(f"[FlashResearch] Processing async task {task_id} at depth {depth} for query: {query[:100]}...")
+                    logger.debug(f"[ParallelResearch] Processing async task {task_id} at depth {depth} for query: {query[:100]}...")
                     
                     # Update progress
                     await self.progress_tracker.update_progress(current_query=query)
@@ -513,7 +513,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                         # Generate sub-queries (NOTE: Controlled by BREADTH)
                         sub_queries = await self.generate_serp_queries(next_query, new_breadth)
 
-                        logger.debug(f"[FlashResearch] Generated {len(sub_queries)} recursive queries for depth {new_depth}")
+                        logger.debug(f"[ParallelResearch] Generated {len(sub_queries)} recursive queries for depth {new_depth}")
                         
                         # Defer launching recursive tasks until AFTER semaphore release
                         pending_children = {
@@ -524,7 +524,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                         }
                         
                 except asyncio.CancelledError:
-                    logger.info(f"[FlashResearch] Task {task_id} was cancelled")
+                    logger.info(f"[ParallelResearch] Task {task_id} was cancelled")
                     # Best-effort salvage of intermediate data
                     try:
                         salvage = await self._salvage_researcher_data(
@@ -556,7 +556,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                         except Exception:
                             pass
                     except Exception as salvage_err:
-                        logger.error(f"[FlashResearch] Salvage on cancellation failed: {salvage_err}")
+                        logger.error(f"[ParallelResearch] Salvage on cancellation failed: {salvage_err}")
                     query_task.state = TaskState.CANCELLED
                     await self.task_manager.complete_task(task_id, error=asyncio.CancelledError("Task cancelled"))
                     self.logger.update_node(
@@ -568,8 +568,8 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                     await self.task_manager.cancel(current_node_id)
                     raise
                 except Exception as e:
-                    logger.error(f"[FlashResearch] Error in recursive research task {task_id}: {str(e)}")
-                    logger.error(f"[FlashResearch] Exception traceback: {traceback.format_exc()}")
+                    logger.error(f"[ParallelResearch] Error in recursive research task {task_id}: {str(e)}")
+                    logger.error(f"[ParallelResearch] Exception traceback: {traceback.format_exc()}")
                     # Best-effort salvage of intermediate data
                     try:
                         salvage = await self._salvage_researcher_data(
@@ -600,7 +600,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                         except Exception:
                             pass
                     except Exception as salvage_err:
-                        logger.error(f"[FlashResearch] Salvage on cancellation failed: {salvage_err}")
+                        logger.error(f"[ParallelResearch] Salvage on cancellation failed: {salvage_err}")
                     query_task.state = TaskState.FAILED
                     await self.task_manager.complete_task(task_id, error=e)
                     self.logger.update_node(
@@ -615,7 +615,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
             # AFTER releasing semaphore: launch and await any deferred recursive children
             if pending_children:
                 try:
-                    logger.debug(f"[FlashResearch] Released semaphore for task {task_id}, launching {len(pending_children['sub_queries'])} recursive sub-tasks at depth {pending_children['new_depth']}")
+                    logger.debug(f"[ParallelResearch] Released semaphore for task {task_id}, launching {len(pending_children['sub_queries'])} recursive sub-tasks at depth {pending_children['new_depth']}")
                     recursive_tasks = []
                     for sub_query in pending_children["sub_queries"]:
                         recursive_task = asyncio.create_task(
@@ -644,7 +644,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                             await monitor_task
                         except asyncio.CancelledError:
                             pass
-                    logger.debug(f"[FlashResearch] Completed task {task_id} with recursive sub-tasks")
+                    logger.debug(f"[ParallelResearch] Completed task {task_id} with recursive sub-tasks")
                 finally:
                     pending_children = None
 
@@ -656,7 +656,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                 
             # Generate initial queries (NOTE: Controlled by BREADTH)
             serp_queries = await self.generate_serp_queries(query, breadth)
-            logger.debug(f"[FlashResearch] Generated {len(serp_queries)} initial queries")
+            logger.debug(f"[ParallelResearch] Generated {len(serp_queries)} initial queries")
             
             # Create and launch initial async tasks with proper task management
             tasks = []
@@ -679,10 +679,10 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                 query_task.asyncio_task = asyncio_task
                 tasks.append(asyncio_task)
                 
-                logger.debug(f"[FlashResearch] Launched initial task {task_id} at depth {depth}")
+                logger.debug(f"[ParallelResearch] Launched initial task {task_id} at depth {depth}")
             
             # Wait for all initial tasks to complete with timeout (consistent with recursive implementation)
-            logger.debug(f"[FlashResearch] All initial tasks launched, waiting for completion...")
+            logger.debug(f"[ParallelResearch] All initial tasks launched, waiting for completion...")
             try:
                 # Use configured global timeout or default to 3600 seconds (60 minutes)
                 root_timeout = getattr(self.config, "time_limit_seconds", 3600)
@@ -691,7 +691,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                     timeout=root_timeout
                 )
             except asyncio.TimeoutError:
-                logger.warning(f"[FlashResearch] Root level tasks timed out after {root_timeout}s")
+                logger.warning(f"[ParallelResearch] Root level tasks timed out after {root_timeout}s")
                 # Cancel all pending tasks
                 for task in tasks:
                     if not task.done():
@@ -744,7 +744,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
             )
             
         if not is_recursive:
-            logger.debug(f"[FlashResearch] Root research completed")
+            logger.debug(f"[ParallelResearch] Root research completed")
             return final_data
         return None  # Recursive calls don't need to return data as it's stored in task_manager
 
@@ -752,7 +752,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                                        node_id: int, start_time: float):
         """Monitor research progress and terminate early if goal is satisfied"""
         try:
-            logger.debug(f"[FlashResearch] Starting research monitoring for node {node_id}")
+            logger.debug(f"[ParallelResearch] Starting research monitoring for node {node_id}")
             
             # Track last evaluated content size to avoid redundant LLM calls
             last_eval_ctx_len = 0
@@ -796,10 +796,10 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                         last_eval_ctx_len = len(current_context)
                         last_eval_learnings_count = len(current_learnings)
 
-                        logger.debug(f"[FlashResearch] Monitoring Node {node_id} Goal Satisfied: {satisfaction_decision.is_goal_satisfied}")
-                        logger.debug(f"[FlashResearch] Monitoring Node {node_id} Satisfaction Score: {satisfaction_decision.satisfaction_score}")
-                        logger.debug(f"[FlashResearch] Monitoring Node {node_id} Quality Score: {satisfaction_decision.quality_score}")
-                        logger.debug(f"[FlashResearch] Monitoring Node {node_id} Reasoning: {satisfaction_decision.reasoning}")
+                        logger.debug(f"[ParallelResearch] Monitoring Node {node_id} Goal Satisfied: {satisfaction_decision.is_goal_satisfied}")
+                        logger.debug(f"[ParallelResearch] Monitoring Node {node_id} Satisfaction Score: {satisfaction_decision.satisfaction_score}")
+                        logger.debug(f"[ParallelResearch] Monitoring Node {node_id} Quality Score: {satisfaction_decision.quality_score}")
+                        logger.debug(f"[ParallelResearch] Monitoring Node {node_id} Reasoning: {satisfaction_decision.reasoning}")
 
                         # Update runtime data
                         await self.task_manager.update_runtime_data(
@@ -815,7 +815,7 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                         )
                         
                         if should_terminate:
-                            logger.debug(f"[FlashResearch] Node {node_id} goal satisfied, terminating early")
+                            logger.debug(f"[ParallelResearch] Node {node_id} goal satisfied, terminating early")
                             await self.task_manager.update_runtime_data(
                                 node_id,
                                 goal_satisfied=True,
@@ -826,13 +826,13 @@ class FlashResearchRuntime(RecursiveDeepResearch):
                             break
                             
                 except Exception as e:
-                    logger.error(f"[FlashResearch] Error during monitoring evaluation: {e}")
+                    logger.error(f"[ParallelResearch] Error during monitoring evaluation: {e}")
                     
         except asyncio.CancelledError:
-            logger.debug(f"[FlashResearch] Research monitoring cancelled for node {node_id}")
+            logger.debug(f"[ParallelResearch] Research monitoring cancelled for node {node_id}")
             raise
         except Exception as e:
-            logger.error(f"[FlashResearch] Error in research monitoring: {e}")
+            logger.error(f"[ParallelResearch] Error in research monitoring: {e}")
 
     def _extract_learnings_from_context(self, context: str) -> List[str]:
         """Extract learnings from research context"""

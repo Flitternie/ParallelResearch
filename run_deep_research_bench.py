@@ -125,13 +125,13 @@ def run_task_worker(args: Tuple[Task, str, str, float, int, float, str]) -> Task
 
         # Import DeepResearch per version
         if version == "baseline":
-            from flashresearch import DeepResearch
+            from parallelresearch import DeepResearch
         elif version == "parallel":
-            from flashresearch import RecursiveDeepResearch as DeepResearch
+            from parallelresearch import RecursiveDeepResearch as DeepResearch
         elif version == "runtime":
-            from flashresearch import FlashResearchRuntime as DeepResearch
-        elif version == "flash":
-            from flashresearch import FlashResearch as DeepResearch
+            from parallelresearch import ParallelResearchRuntime as DeepResearch
+        elif version == "parallelresearch":
+            from parallelresearch import ParallelResearch as DeepResearch
 
         last_error = ""
         for attempt in range(1, max(1, int(retries)) + 1):
@@ -236,7 +236,7 @@ def main() -> None:
     parser.add_argument("--timeout", type=int, default=3600, help="Per-task timeout in seconds; 0 disables timeout")
     parser.add_argument("--retries", type=int, default=3, help="Retries on timeout per task")
     parser.add_argument("--retry_delay", type=float, default=1.0, help="Delay between retries in seconds")
-    parser.add_argument("--version", type=str, choices=["baseline", "parallel", "runtime", "flash"], help="DeepResearch implementation version to use")
+    parser.add_argument("--version", type=str, choices=["baseline", "parallel", "runtime", "parallelresearch"], help="DeepResearch implementation version to use")
     parser.add_argument("--language", type=str, default="en", choices=["en", "zh"], help="Filter tasks by language (default: en)")
     args = parser.parse_args()
 

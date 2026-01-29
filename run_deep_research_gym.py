@@ -180,13 +180,13 @@ def run_single_process(args: Tuple[str, str, str, str, int, float | None, int, f
         
         # Import DeepResearch in each process based on version
         if version == "baseline":
-            from flashresearch import DeepResearch
+            from parallelresearch import DeepResearch
         elif version == "parallel":
-            from flashresearch import RecursiveDeepResearch as DeepResearch
+            from parallelresearch import RecursiveDeepResearch as DeepResearch
         elif version == "runtime":
-            from flashresearch import FlashResearchRuntime as DeepResearch
-        elif version == "flash":
-            from flashresearch import FlashResearch as DeepResearch
+            from parallelresearch import ParallelResearchRuntime as DeepResearch
+        elif version == "parallelresearch":
+            from parallelresearch import ParallelResearch as DeepResearch
         
         # Run the async function with retry-on-timeout
         last_error = ""
@@ -317,13 +317,13 @@ def save_run_configuration(output_dir: str, args, question_files: List[str]):
     # Get DeepResearch class name based on version
     deep_research_name = "unknown"
     if args.version == "baseline":
-        deep_research_name = "flashresearch.DeepResearch"
+        deep_research_name = "parallelresearch.DeepResearch"
     elif args.version == "parallel":
-        deep_research_name = "flashresearch.RecursiveDeepResearch"
+        deep_research_name = "parallelresearch.RecursiveDeepResearch"
     elif args.version == "runtime":
-        deep_research_name = "flashresearch.FlashResearchRuntime"
-    elif args.version == "flash":
-        deep_research_name = "flashresearch.FlashResearch"
+        deep_research_name = "parallelresearch.ParallelResearchRuntime"
+    elif args.version == "parallelresearch":
+        deep_research_name = "parallelresearch.ParallelResearch"
     
     snapshot = {
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
@@ -383,7 +383,7 @@ if __name__ == "__main__":
                        help="Number of attempts per run on timeout (default: 3)")
     parser.add_argument("--retry-delay", type=float, default=1.0,
                        help="Seconds to wait before retrying after a timeout (default: 1.0)")
-    parser.add_argument("--version", type=str, choices=["baseline", "parallel", "runtime", "flash"],
+    parser.add_argument("--version", type=str, choices=["baseline", "parallel", "runtime", "parallelresearch"],
                        help="Version of the research model to use")
 
     args = parser.parse_args()
