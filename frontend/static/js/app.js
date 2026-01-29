@@ -663,7 +663,7 @@ class DeepResearchApp {
         notification.innerHTML = `
             <div class="notification-content">
                 <strong>Node ${nodeId} Terminated</strong>
-                <p>Terminated by the Real-time Orchestrator after achieving its research goal.</p>
+                <p>Terminated by the Runtime Orchestrator after achieving its research goal.</p>
             </div>
             <button class="notification-close">&times;</button>
         `;

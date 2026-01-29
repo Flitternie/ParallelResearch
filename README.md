@@ -5,7 +5,7 @@ ParallelResearch transforms sequential deep research into parallel, runtime orch
 ## Key Features
 
 - **Adaptive Planning** — Dynamically allocates resources based on query complexity
-- **Real-time Orchestration** — Monitors progress and prunes redundant paths during execution  
+- **Runtime Orchestration** — Monitors progress and prunes redundant paths during execution  
 - **Multi-dimensional Parallelization** — Concurrent execution across research breadth and depth
 
 ## Installation
@@ -69,7 +69,7 @@ Available `--version` options:
 | `baseline` | GPT Researcher's baseline implementation |
 | `parallelresearch` | ParallelResearch (full method) |
 | `runtime` | Ablation without adaptive planning |
-| `parallel` | Ablation without adaptive planning or real-time orchestration |
+| `parallel` | Ablation without adaptive planning or runtime orchestration |
 
 **DeepResearch Bench:**
 
