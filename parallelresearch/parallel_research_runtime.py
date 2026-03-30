@@ -511,7 +511,7 @@ class ParallelResearchRuntime(RecursiveDeepResearch):
                         await self.task_manager.register_node(recursive_planning_node_id, current_node_id)
                         
                         # Generate sub-queries (NOTE: Controlled by BREADTH)
-                        sub_queries = await self.generate_serp_queries(next_query, new_breadth)
+                        sub_queries = await self.generate_serp_queries(next_query, num_queries=new_breadth)
 
                         logger.debug(f"[ParallelResearch] Generated {len(sub_queries)} recursive queries for depth {new_depth}")
                         
@@ -655,7 +655,7 @@ class ParallelResearchRuntime(RecursiveDeepResearch):
                 self.task_manager.tasks[current_node_id] = current_task
                 
             # Generate initial queries (NOTE: Controlled by BREADTH)
-            serp_queries = await self.generate_serp_queries(query, breadth)
+            serp_queries = await self.generate_serp_queries(query, num_queries=breadth)
             logger.debug(f"[ParallelResearch] Generated {len(serp_queries)} initial queries")
             
             # Create and launch initial async tasks with proper task management

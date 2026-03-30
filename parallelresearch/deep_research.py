@@ -206,7 +206,7 @@ Format each question on a new line starting with 'Question: '"""}
                     if q.strip().startswith('Question:')]
         return questions[:num_questions]
 
-    async def generate_serp_queries(self, query: str, num_queries: int = 3) -> List[Dict[str, str]]:
+    async def generate_serp_queries(self, query: str, num_queries: int) -> List[Dict[str, str]]:
         """Generate SERP queries for research"""
 
         # Pydantic models for structured output
