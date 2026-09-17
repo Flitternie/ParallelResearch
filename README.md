@@ -1,10 +1,24 @@
 # ParallelResearch
 
-Official implementation of **Efficient Tree-Structured Deep Research with Adaptive Resource Allocation**.
-
-**Lunyiu Nie, Nedim Lipka, Ryan A. Rossi, Swarat Chaudhuri**
-
-Spotlight at the **ICLR 2026 Agents in the Wild Workshop**.
+<p align="center">
+  Official implementation of <strong><a href="https://arxiv.org/abs/2510.05145">Efficient Tree-Structured Deep Research with Adaptive Resource Allocation</a></strong>
+</p>
+<p align="center">
+  <b>Lunyiu Nie</b><sup>1*</sup>&nbsp;&nbsp;
+  <b>Nedim Lipka</b><sup>2</sup>&nbsp;&nbsp;
+  <b>Ryan A. Rossi</b><sup>2</sup>&nbsp;&nbsp;
+  <b>Swarat Chaudhuri</b><sup>1</sup>
+</p>
+<p align="center">
+  <sup>1</sup>The University of Texas at Austin&nbsp;&nbsp;
+  <sup>2</sup>Adobe Research
+</p>
+<p align="center">
+  <sup>*</sup><i>Work done during an internship at Adobe Research.</i>
+</p>
+<p align="center">
+  <strong>Spotlight</strong> · ICLR 2026 Agents in the Wild Workshop
+</p>
 
 ParallelResearch transforms sequential deep research into parallel, runtime orchestration by dynamically decomposing complex queries into tree-structured sub-tasks, achieving up to **5× speedup** while maintaining comparable quality.
 
