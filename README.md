@@ -1,24 +1,10 @@
-# ParallelResearch
-
 <p align="center">
   Official implementation of <strong><a href="https://arxiv.org/abs/2510.05145">Efficient Tree-Structured Deep Research with Adaptive Resource Allocation</a></strong>
 </p>
 <p align="center">
-  <b>Lunyiu Nie</b><sup>1*</sup>&nbsp;&nbsp;
-  <b>Nedim Lipka</b><sup>2</sup>&nbsp;&nbsp;
-  <b>Ryan A. Rossi</b><sup>2</sup>&nbsp;&nbsp;
-  <b>Swarat Chaudhuri</b><sup>1</sup>
-</p>
-<p align="center">
-  <sup>1</sup>The University of Texas at Austin&nbsp;&nbsp;
-  <sup>2</sup>Adobe Research
-</p>
-<p align="center">
-  <sup>*</sup><i>Work done during an internship at Adobe Research.</i>
-</p>
-<p align="center">
   <strong>Spotlight</strong> · ICLR 2026 Agents in the Wild Workshop
 </p>
+
 
 ParallelResearch transforms sequential deep research into parallel, runtime orchestration by dynamically decomposing complex queries into tree-structured sub-tasks, achieving up to **5× speedup** while maintaining comparable quality.
 
@@ -171,3 +157,13 @@ parallelresearch/
   year={2025}
 }
 ```
+
+This work is licensed under a
+[Creative Commons Attribution-NonCommercial 4.0 International License][cc-by-nc].
+
+[![CC BY-NC 4.0][cc-by-nc-image]][cc-by-nc]
+
+
+[cc-by-nc]: https://creativecommons.org/licenses/by-nc/4.0/
+[cc-by-nc-image]: https://licensebuttons.net/l/by-nc/4.0/88x31.png
+[cc-by-nc-shield]: https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg
